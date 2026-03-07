@@ -18,6 +18,9 @@ using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace PipelogiqSDK.Runner;
 
+/// <summary>
+/// Worker runtime that consumes stage messages, executes handlers, and publishes results.
+/// </summary>
 public class PipelineRunner
 {
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(1);
@@ -59,6 +62,13 @@ public class PipelineRunner
     private long _jobsProcessed;
     private long _jobsFailed;
 
+    /// <summary>
+    /// Initializes runner instance.
+    /// </summary>
+    /// <param name="apiClient">Pipelogiq API client.</param>
+    /// <param name="runnerOptions">Runner options.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="stageExecutor">Stage executor.</param>
     public PipelineRunner(
         PipelogiqApiClient apiClient,
         PipelogiqRunnerOptions runnerOptions,
@@ -71,21 +81,40 @@ public class PipelineRunner
         _stageExecutor = stageExecutor;
     }
 
+    /// <summary>
+    /// Registers handler instance by handler name.
+    /// </summary>
+    /// <param name="handlerName">Handler name from stage messages.</param>
+    /// <param name="handler">Handler instance.</param>
     public void RegisterHandler(string handlerName, IStageHandler handler)
     {
         _handlerInstances[handlerName] = handler;
     }
 
+    /// <summary>
+    /// Registers handler type by handler name.
+    /// </summary>
+    /// <param name="handlerName">Handler name from stage messages.</param>
+    /// <param name="handlerType">Handler type resolved from DI container.</param>
     public void RegisterHandler(string handlerName, Type handlerType)
     {
         _handlerTypes[handlerName] = handlerType;
     }
 
+    /// <summary>
+    /// Registers handler type by handler name.
+    /// </summary>
+    /// <typeparam name="THandler">Handler type resolved from DI container.</typeparam>
+    /// <param name="handlerName">Handler name from stage messages.</param>
     public void RegisterHandler<THandler>(string handlerName) where THandler : class, IStageHandler
     {
         _handlerTypes[handlerName] = typeof(THandler);
     }
 
+    /// <summary>
+    /// Starts worker lifecycle loop until cancellation is requested.
+    /// </summary>
+    /// <param name="stoppingToken">Cancellation token.</param>
     public async Task StartAsync(CancellationToken stoppingToken)
     {
         var supportedHandlers = GetRegisteredHandlerNames();
@@ -125,6 +154,19 @@ public class PipelineRunner
             }
             catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
             {
+            }
+            catch (WorkerConfigurationException ex)
+            {
+                SetState(WorkerStates.Error, "Worker configuration is invalid.", ex.Message);
+                _logger.LogError(ex, "Worker stopped due to configuration error.");
+                return;
+            }
+            catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
+            {
+                var reason = ex.ShutdownReason?.ReplyText ?? ex.Message;
+                SetState(WorkerStates.Error, "RabbitMQ queue configuration mismatch.", reason);
+                _logger.LogError(ex, "Worker stopped due to RabbitMQ PRECONDITION_FAILED (406).");
+                return;
             }
             catch (Exception ex)
             {
@@ -566,19 +608,76 @@ public class PipelineRunner
             probeChannel.QueueDeclarePassive(queueName);
             return;
         }
-        catch (OperationInterruptedException ex) when (ex.ShutdownReason?.ReplyCode == 404)
+        catch (OperationInterruptedException ex) when (IsQueueNotFound(ex))
         {
+            if (_runnerOptions.QueueProvisioningMode == QueueProvisioningMode.AssertOnly)
+            {
+                throw new WorkerConfigurationException(
+                    $"Queue '{queueName}' does not exist. QueueProvisioningMode is AssertOnly, so the SDK will not create it.");
+            }
+        }
+        catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
+        {
+            throw BuildQueueConfigurationException(queueName, "passive assert", ex);
         }
 
-        using var createChannel = _connection.CreateModel();
-        createChannel.QueueDeclare(
-            queue: queueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null);
+        if (_runnerOptions.QueueProvisioningMode != QueueProvisioningMode.Ensure)
+            return;
 
-        _logger.LogInformation("Created missing queue {QueueName}.", queueName);
+        using var createChannel = _connection.CreateModel();
+        try
+        {
+            createChannel.QueueDeclare(
+                queue: queueName,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: BuildQueueArguments());
+        }
+        catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
+        {
+            throw BuildQueueConfigurationException(queueName, "ensure declare", ex);
+        }
+
+        _logger.LogInformation("Created missing queue {QueueName} using bootstrap DLQ arguments.", queueName);
+    }
+
+    private IDictionary<string, object> BuildQueueArguments()
+    {
+        var dlqEnabled = _bootstrap?.MessageBroker.DlqEnabled ?? false;
+        var dlqTtlSec = _bootstrap?.MessageBroker.DlqTtlSec ?? 0;
+
+        return new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["dlqEnabled"] = dlqEnabled,
+            ["dlqTtlSec"] = dlqTtlSec,
+        };
+    }
+
+    private WorkerConfigurationException BuildQueueConfigurationException(
+        string queueName,
+        string operation,
+        OperationInterruptedException ex)
+    {
+        var dlqEnabled = _bootstrap?.MessageBroker.DlqEnabled ?? false;
+        var dlqTtlSec = _bootstrap?.MessageBroker.DlqTtlSec ?? 0;
+        var brokerReason = ex.ShutdownReason?.ReplyText ?? ex.Message;
+
+        return new WorkerConfigurationException(
+            $"Queue '{queueName}' failed {operation} with PRECONDITION_FAILED (406). " +
+            $"Expected arguments: dlqEnabled={dlqEnabled}, dlqTtlSec={dlqTtlSec}. " +
+            $"Broker reason: {brokerReason}",
+            ex);
+    }
+
+    private static bool IsQueueNotFound(OperationInterruptedException ex)
+    {
+        return ex.ShutdownReason?.ReplyCode == 404;
+    }
+
+    private static bool IsPreconditionFailed(OperationInterruptedException ex)
+    {
+        return ex.ShutdownReason?.ReplyCode == 406;
     }
 
     private async Task PublishToQueueAsync(string queueName, string payload, CancellationToken stoppingToken)
@@ -888,6 +987,9 @@ public class PipelineRunner
         {
         }
     }
+
+    private sealed class WorkerConfigurationException(string message, Exception? innerException = null)
+        : InvalidOperationException(message, innerException);
 
     private static class WorkerStates
     {

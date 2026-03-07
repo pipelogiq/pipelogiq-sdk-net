@@ -4,16 +4,10 @@ This guide covers the minimal setup to run a Pipelogiq worker with the .NET SDK.
 
 ## Installation
 
-Add GitHub Packages source and install the package:
+Install the package from NuGet.org:
 
 ```bash
-dotnet nuget add source "https://nuget.pkg.github.com/pipelogiq/index.json" \
-  --name pipelogiq \
-  --username <github-username> \
-  --password <github-token> \
-  --store-password-in-clear-text
-
-dotnet add package PipelogiqSDK --source pipelogiq --prerelease
+dotnet add package PipelogiqSDK --prerelease
 ```
 
 ## Basic pipeline example

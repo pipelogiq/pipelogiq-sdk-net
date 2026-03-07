@@ -4,35 +4,71 @@ using PipelogiqSDK.Execution;
 
 namespace PipelogiqSDK.Api;
 
+/// <summary>
+/// Pipelogiq HTTP client for pipelines, logs, and worker endpoints.
+/// </summary>
 public class PipelogiqApiClient : BaseApiClient
 {
     private readonly string? _apiKey;
 
+    /// <summary>
+    /// Initializes a client from runner options.
+    /// </summary>
+    /// <param name="options">Runner options.</param>
     public PipelogiqApiClient(PipelogiqRunnerOptions options) : base(options.ApiUrl, options.ApiKey)
     {
         _apiKey = options.ApiKey;
     }
 
+    /// <summary>
+    /// Initializes a client from explicit base URL and API key.
+    /// </summary>
+    /// <param name="baseUrl">Base API URL.</param>
+    /// <param name="apiKey">Optional API key.</param>
     public PipelogiqApiClient(string baseUrl, string? apiKey = null) : base(baseUrl, apiKey)
     {
         _apiKey = apiKey;
     }
 
-    public Task<PipelineDto> PostPipelineAsync(PipelineDto pipeline, CancellationToken ct = default)
+    /// <summary>
+    /// Creates a pipeline via API.
+    /// </summary>
+    /// <param name="pipeline">Pipeline payload.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Created pipeline response.</returns>
+    public Task<PipelineResponse> PostPipelineAsync(PipelineDto pipeline, CancellationToken ct = default)
     {
-        return PostAsync<PipelineDto>("pipelines", pipeline, ct);
+        return PostAsync<PipelineResponse>("pipelines", pipeline, ct);
     }
 
-    public Task<PipelineDto> PostEventAsync(PipelineDto pipeline, CancellationToken ct = default)
+    /// <summary>
+    /// Sends an event payload via pipeline endpoint.
+    /// </summary>
+    /// <param name="pipeline">Event payload.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Created event pipeline response.</returns>
+    public Task<PipelineResponse> PostEventAsync(PipelineDto pipeline, CancellationToken ct = default)
     {
-        return PostAsync<PipelineDto>("pipelines", pipeline, ct);
+        return PostAsync<PipelineResponse>("pipelines", pipeline, ct);
     }
 
+    /// <summary>
+    /// Sends a log record.
+    /// </summary>
+    /// <param name="logDto">Log payload.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Created log payload.</returns>
     public Task<LogDto> PostLogAsync(LogDto logDto, CancellationToken ct = default)
     {
         return PostAsync<LogDto>("logs", logDto, ct);
     }
 
+    /// <summary>
+    /// Bootstraps worker session.
+    /// </summary>
+    /// <param name="request">Bootstrap request payload.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Bootstrap response.</returns>
     public Task<WorkerBootstrapResponse> PostWorkerBootstrapAsync(
         WorkerBootstrapRequest request,
         CancellationToken ct = default)
@@ -47,6 +83,12 @@ public class PipelogiqApiClient : BaseApiClient
         return PostAsync<WorkerBootstrapResponse>("workers/bootstrap", request, ct, headers);
     }
 
+    /// <summary>
+    /// Sends worker heartbeat.
+    /// </summary>
+    /// <param name="workerSessionToken">Worker session token.</param>
+    /// <param name="request">Heartbeat payload.</param>
+    /// <param name="ct">Cancellation token.</param>
     public Task PostWorkerHeartbeatAsync(
         string workerSessionToken,
         WorkerHeartbeatRequest request,
@@ -55,6 +97,12 @@ public class PipelogiqApiClient : BaseApiClient
         return PostAsync("workers/heartbeat", request, ct, BuildSessionHeaders(workerSessionToken));
     }
 
+    /// <summary>
+    /// Sends worker event.
+    /// </summary>
+    /// <param name="workerSessionToken">Worker session token.</param>
+    /// <param name="request">Worker event payload.</param>
+    /// <param name="ct">Cancellation token.</param>
     public Task PostWorkerEventAsync(
         string workerSessionToken,
         WorkerEventRequest request,
@@ -63,6 +111,12 @@ public class PipelogiqApiClient : BaseApiClient
         return PostAsync("workers/events", request, ct, BuildSessionHeaders(workerSessionToken));
     }
 
+    /// <summary>
+    /// Sends worker shutdown event.
+    /// </summary>
+    /// <param name="workerSessionToken">Worker session token.</param>
+    /// <param name="request">Shutdown payload.</param>
+    /// <param name="ct">Cancellation token.</param>
     public Task PostWorkerShutdownAsync(
         string workerSessionToken,
         WorkerShutdownRequest request,
@@ -71,6 +125,11 @@ public class PipelogiqApiClient : BaseApiClient
         return PostAsync("workers/shutdown", request, ct, BuildSessionHeaders(workerSessionToken));
     }
 
+    /// <summary>
+    /// Requests RabbitMQ connection details from API.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>RabbitMQ connection settings.</returns>
     public Task<RabbitConnectionResponse> GetRabbitMqConnectionAsync(CancellationToken ct = default)
     {
         return GetAsync<RabbitConnectionResponse>("rabbitmq/connection", ct);
