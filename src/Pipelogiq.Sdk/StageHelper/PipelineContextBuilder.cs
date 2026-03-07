@@ -5,12 +5,21 @@ using PipelogiqSDK.Execution;
 
 namespace PipelogiqSDK.StageHelper;
 
+/// <summary>
+/// Helpers for adding values to stage context payload.
+/// </summary>
 public static class PipelineContextBuilder
 {
     private static readonly Dictionary<int, List<ContextItem>> ItemsByPipeline = new();
     private static readonly ReaderWriterLockSlim DictLock = new();
 
 
+    /// <summary>
+    /// Adds or replaces a context item by key.
+    /// </summary>
+    /// <param name="context">Stage context.</param>
+    /// <param name="key">Context key.</param>
+    /// <param name="value">Context value.</param>
     public static void AddItem(this IStageContext? context, string key, object value)
     {
         if (context?.PipelineId == null)

@@ -8,16 +8,10 @@ APIs may change while the SDK is still stabilizing.
 
 ## Installation
 
-Packages are currently published via GitHub Packages.
+Packages are published on NuGet.org.
 
 ```bash
-dotnet nuget add source "https://nuget.pkg.github.com/pipelogiq/index.json" \
-  --name pipelogiq \
-  --username <github-username> \
-  --password <github-personal-access-token> \
-  --store-password-in-clear-text
-
-dotnet add package PipelogiqSDK --source pipelogiq --prerelease
+dotnet add package PipelogiqSDK --prerelease
 ```
 
 ## Quickstart

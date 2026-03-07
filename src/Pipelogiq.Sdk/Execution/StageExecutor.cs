@@ -6,12 +6,21 @@ using PipelogiqSDK.StageHelper;
 
 namespace PipelogiqSDK.Execution;
 
+/// <summary>
+/// Executes stage handlers and manages trace/context propagation.
+/// </summary>
+/// <param name="serviceProvider">Service provider for handler resolution.</param>
 public class StageExecutor(IServiceProvider serviceProvider)
 {
     private const string TraceparentKey = "traceparent";
     private const string TracestateKey = "tracestate";
     private static readonly ActivitySource StageActivitySource = new("PipelogiqSDK");
 
+    /// <summary>
+    /// Executes a stage handler and returns stage result.
+    /// </summary>
+    /// <param name="data">Stage execution data.</param>
+    /// <returns>Stage execution result.</returns>
     public async Task<IStageResult> ExecuteStageHandlerAsync(StageExecutionData data)
     {
         var handler = ResolveHandler(data);

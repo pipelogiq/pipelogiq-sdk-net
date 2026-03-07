@@ -3,8 +3,18 @@ using PipelogiqSDK.Abstractions;
 
 namespace PipelogiqSDK.StageHelper;
 
+/// <summary>
+/// Extensions for reading typed values from stage context payload.
+/// </summary>
 public static class StageContextExtension
 {
+    /// <summary>
+    /// Attempts to read and convert payload value by key.
+    /// </summary>
+    /// <typeparam name="T">Expected value type.</typeparam>
+    /// <param name="stageContext">Stage context.</param>
+    /// <param name="key">Payload key.</param>
+    /// <returns>Converted value or default.</returns>
     public static T? TryGetValue<T>(this IStageContext? stageContext, string key)
     {
         var dict = stageContext?.Payload;

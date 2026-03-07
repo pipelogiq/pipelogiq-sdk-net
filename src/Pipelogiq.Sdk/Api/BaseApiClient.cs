@@ -4,11 +4,20 @@ using Newtonsoft.Json;
 
 namespace PipelogiqSDK.Api;
 
+/// <summary>
+/// Base HTTP API client with JSON serialization helpers.
+/// </summary>
 public abstract class BaseApiClient
 {
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
 
+    /// <summary>
+    /// Initializes a new API client instance.
+    /// </summary>
+    /// <param name="baseUrl">Base API URL.</param>
+    /// <param name="apiKey">Optional API key.</param>
+    /// <param name="handler">Optional HTTP message handler.</param>
     protected BaseApiClient(string baseUrl, string? apiKey = null, HttpMessageHandler? handler = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
@@ -26,11 +35,23 @@ public abstract class BaseApiClient
         }
     }
 
+    /// <summary>
+    /// Sets bearer token for outgoing requests.
+    /// </summary>
+    /// <param name="token">Bearer token value.</param>
     protected void SetBearerToken(string token)
     {
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
+    /// <summary>
+    /// Sends GET request and deserializes JSON response.
+    /// </summary>
+    /// <typeparam name="T">Target response type.</typeparam>
+    /// <param name="requestUri">Relative request URI.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="headers">Optional request headers.</param>
+    /// <returns>Deserialized response body.</returns>
     protected async Task<T> GetAsync<T>(
         string requestUri,
         CancellationToken ct = default,
@@ -43,6 +64,15 @@ public abstract class BaseApiClient
         return JsonConvert.DeserializeObject<T>(responseData)!;
     }
 
+    /// <summary>
+    /// Sends POST request with JSON payload and deserializes JSON response.
+    /// </summary>
+    /// <typeparam name="T">Target response type.</typeparam>
+    /// <param name="requestUri">Relative request URI.</param>
+    /// <param name="content">Payload object.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="headers">Optional request headers.</param>
+    /// <returns>Deserialized response body.</returns>
     protected async Task<T> PostAsync<T>(
         string requestUri,
         object content,
@@ -57,6 +87,13 @@ public abstract class BaseApiClient
         return JsonConvert.DeserializeObject<T>(responseData)!;
     }
 
+    /// <summary>
+    /// Sends POST request with JSON payload.
+    /// </summary>
+    /// <param name="requestUri">Relative request URI.</param>
+    /// <param name="content">Payload object.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="headers">Optional request headers.</param>
     protected async Task PostAsync(
         string requestUri,
         object content,
@@ -69,6 +106,15 @@ public abstract class BaseApiClient
         await EnsureSuccess(response);
     }
 
+    /// <summary>
+    /// Sends PUT request with JSON payload and deserializes JSON response.
+    /// </summary>
+    /// <typeparam name="T">Target response type.</typeparam>
+    /// <param name="requestUri">Relative request URI.</param>
+    /// <param name="content">Payload object.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="headers">Optional request headers.</param>
+    /// <returns>Deserialized response body.</returns>
     protected async Task<T> PutAsync<T>(
         string requestUri,
         object content,
@@ -83,6 +129,12 @@ public abstract class BaseApiClient
         return JsonConvert.DeserializeObject<T>(responseData)!;
     }
 
+    /// <summary>
+    /// Sends DELETE request.
+    /// </summary>
+    /// <param name="requestUri">Relative request URI.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="headers">Optional request headers.</param>
     protected async Task DeleteAsync(
         string requestUri,
         CancellationToken ct = default,
