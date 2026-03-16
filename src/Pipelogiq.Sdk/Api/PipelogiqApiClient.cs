@@ -1,3 +1,4 @@
+using PipelogiqSDK.Agent.Models;
 using PipelogiqSDK.Configuration;
 using PipelogiqSDK.Contracts;
 using PipelogiqSDK.Execution;
@@ -26,6 +27,11 @@ public class PipelogiqApiClient : BaseApiClient
     /// <param name="baseUrl">Base API URL.</param>
     /// <param name="apiKey">Optional API key.</param>
     public PipelogiqApiClient(string baseUrl, string? apiKey = null) : base(baseUrl, apiKey)
+    {
+        _apiKey = apiKey;
+    }
+
+    internal PipelogiqApiClient(string baseUrl, string? apiKey, HttpMessageHandler handler) : base(baseUrl, apiKey, handler)
     {
         _apiKey = apiKey;
     }
@@ -133,6 +139,38 @@ public class PipelogiqApiClient : BaseApiClient
     public Task<RabbitConnectionResponse> GetRabbitMqConnectionAsync(CancellationToken ct = default)
     {
         return GetAsync<RabbitConnectionResponse>("rabbitmq/connection", ct);
+    }
+
+    /// <summary>
+    /// Appends stages to a running pipeline (used by AI agent orchestrator).
+    /// </summary>
+    /// <param name="pipelineId">Pipeline identifier.</param>
+    /// <param name="request">Stages to append.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Response containing appended stages with assigned IDs.</returns>
+    public Task<AppendStagesResponse> AppendAgentStagesAsync(
+        int pipelineId,
+        AppendStagesRequest request,
+        CancellationToken ct = default)
+    {
+        return PostAsync<AppendStagesResponse>($"pipelines/{pipelineId}/stages", request, ct);
+    }
+
+    /// <summary>
+    /// Resumes a stage that is waiting for external approval.
+    /// </summary>
+    /// <param name="stageId">Stage identifier to resume.</param>
+    /// <param name="approved">Whether the pending action was approved.</param>
+    /// <param name="rejectionReason">Optional reason for rejection.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public Task ResumeStageApprovalAsync(
+        int stageId,
+        bool approved,
+        string? rejectionReason = null,
+        CancellationToken ct = default)
+    {
+        var request = new ResumeStageRequest { Approved = approved, RejectionReason = rejectionReason };
+        return PostAsync($"stages/{stageId}/resume", request, ct);
     }
 
     private string ResolveApiKey()

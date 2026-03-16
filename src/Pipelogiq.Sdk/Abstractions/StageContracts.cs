@@ -64,6 +64,12 @@ public interface IStageResult
     bool RunNextIfCurrentFailed { get; set; }
 
     /// <summary>
+    /// Gets or sets whether this stage is waiting for external approval before continuing.
+    /// When true, the pipeline pauses at this stage until resumed via ResumeStageApprovalAsync.
+    /// </summary>
+    bool IsWaitingForApproval { get; set; }
+
+    /// <summary>
     /// Gets or sets logs produced by the stage.
     /// </summary>
     List<Contracts.StageLogDto>? Logs { get; set; }

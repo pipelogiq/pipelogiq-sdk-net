@@ -1,0 +1,188 @@
+using PipelogiqSDK.Abstractions;
+using PipelogiqSDK.Agent.Configuration;
+using PipelogiqSDK.Agent.Handlers;
+using PipelogiqSDK.Agent.Models;
+using PipelogiqSDK.Agent.Services;
+using PipelogiqSDK.Api;
+using PipelogiqSDK.Contracts;
+
+using Xunit;
+
+namespace PipelogiqSDK.Tests.Agent;
+
+public sealed class AgentThinkHandlerTests
+{
+    [Fact]
+    public async Task ExecuteAsync_MutatingCallWithoutPreApproval_ForcesConfirmationStage()
+    {
+        var planner = new StaticPlanner(new AgentThinkDecision
+        {
+            Action = AgentThinkAction.CallTool,
+            ToolCall = new AgentToolCall
+            {
+                Tool = "updateOrder",
+                ResultKey = "updateResult",
+                Params = new Dictionary<string, object?> { ["id"] = 42, ["status"] = "paid" },
+            },
+            RawDecisionJson = """{"action":"call_tool"}""",
+        });
+
+        var handler = new CapturingThinkHandler(
+            planner,
+            new StaticToolRegistry([
+                new AgentToolDefinition
+                {
+                    Name = "updateOrder",
+                    Description = "Update order",
+                    HttpMethod = "PATCH",
+                    UrlTemplate = "/api/orders/{id}",
+                }
+            ]),
+            new AgentOptions
+            {
+                RequireConfirmationForMutations = true,
+                MaxThinkSteps = 10,
+            },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 101,
+            StageId = 201,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Mark order as paid",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.LastAppendedStages.Count);
+        Assert.Equal("AgentConfirmationHandler", handler.LastAppendedStages[0].StageHandlerName);
+        Assert.Equal("AgentThinkHandler", handler.LastAppendedStages[1].StageHandlerName);
+
+        var confirmationInput = Assert.IsType<AgentConfirmationInput>(handler.LastAppendedStages[0].Input);
+        Assert.Single(confirmationInput.PendingMutations);
+        Assert.Equal("updateOrder", confirmationInput.PendingMutations[0].Tool);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MutatingCallWithPreApproval_ExecutesToolStageWithoutExtraConfirmation()
+    {
+        var plannedCall = new AgentToolCall
+        {
+            Tool = "updateOrder",
+            ResultKey = "updateResult",
+            Params = new Dictionary<string, object?> { ["id"] = 42, ["status"] = "paid" },
+        };
+
+        var planner = new StaticPlanner(new AgentThinkDecision
+        {
+            Action = AgentThinkAction.CallTool,
+            ToolCall = new AgentToolCall
+            {
+                Tool = "updateOrder",
+                ResultKey = "updateResult",
+                Params = new Dictionary<string, object?> { ["id"] = 42, ["status"] = "paid" },
+            },
+            RawDecisionJson = """{"action":"call_tool"}""",
+        });
+
+        var handler = new CapturingThinkHandler(
+            planner,
+            new StaticToolRegistry([
+                new AgentToolDefinition
+                {
+                    Name = "updateOrder",
+                    Description = "Update order",
+                    HttpMethod = "PATCH",
+                    UrlTemplate = "/api/orders/{id}",
+                }
+            ]),
+            new AgentOptions
+            {
+                RequireConfirmationForMutations = true,
+                MaxThinkSteps = 10,
+            },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 102,
+            StageId = 202,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Mark order as paid",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+                ["agent:approvedMutations"] = new List<AgentToolCall> { plannedCall },
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.LastAppendedStages.Count);
+        Assert.Equal("AgentToolHandler", handler.LastAppendedStages[0].StageHandlerName);
+        Assert.Equal("AgentThinkHandler", handler.LastAppendedStages[1].StageHandlerName);
+        Assert.False(context.Payload!.ContainsKey("agent:approvedMutations"));
+    }
+
+    private sealed class CapturingThinkHandler(
+        ILlmPlanner llmPlanner,
+        IAgentToolRegistry toolRegistry,
+        AgentOptions agentOptions,
+        PipelogiqApiClient apiClient)
+        : AgentThinkHandler(llmPlanner, toolRegistry, agentOptions, apiClient)
+    {
+        public List<StageInfo> LastAppendedStages { get; private set; } = new();
+
+        protected override Task AppendStagesAsync(int pipelineId, IEnumerable<StageInfo> stages)
+        {
+            LastAppendedStages = stages.ToList();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StaticPlanner(AgentThinkDecision decision) : ILlmPlanner
+    {
+        public Task<AgentPlan> PlanAsync(
+            string userMessage,
+            IReadOnlyList<AgentToolDefinition> tools,
+            string? systemPrompt = null,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult(new AgentPlan());
+        }
+
+        public Task<string> SynthesizeAsync(
+            string originalMessage,
+            IReadOnlyList<AgentToolResult> results,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult("done");
+        }
+
+        public Task<AgentThinkDecision> ThinkAsync(
+            string originalMessage,
+            IReadOnlyList<AgentConversationTurn> history,
+            IReadOnlyList<AgentToolDefinition> tools,
+            bool requireConfirmationForMutations,
+            string? systemPrompt = null,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult(decision);
+        }
+    }
+
+    private sealed class StaticToolRegistry(IReadOnlyList<AgentToolDefinition> tools) : IAgentToolRegistry
+    {
+        public IReadOnlyList<AgentToolDefinition> GetAll() => tools;
+
+        public AgentToolDefinition? Find(string name) =>
+            tools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+}

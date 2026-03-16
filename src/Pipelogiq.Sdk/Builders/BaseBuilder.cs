@@ -15,6 +15,8 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
 {
     private const string TraceparentKey = "traceparent";
     private const string TracestateKey = "tracestate";
+    private const string OutboundActivityName = "pipelogiq.pipeline.send";
+    private static readonly ActivitySource OutboundActivitySource = new("PipelogiqSDK");
 
     /// <summary>
     /// API key used for request execution.
@@ -101,17 +103,37 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
             })
             .ToList();
 
+        var hasTraceparent = HasContextItem(contextItems, TraceparentKey);
+        var hasTracestate = HasContextItem(contextItems, TracestateKey);
+
+        using var createdActivity = EnsureCurrentActivityForTraceContext(hasTraceparent);
         var activity = Activity.Current;
         if (activity == null)
             return contextItems;
 
-        if (!HasContextItem(contextItems, TraceparentKey) && !string.IsNullOrWhiteSpace(activity.Id))
+        if (!hasTraceparent && !string.IsNullOrWhiteSpace(activity.Id))
             contextItems.Add(CreateContextItem(TraceparentKey, activity.Id!));
 
-        if (!HasContextItem(contextItems, TracestateKey) && !string.IsNullOrWhiteSpace(activity.TraceStateString))
+        if (!hasTracestate && !string.IsNullOrWhiteSpace(activity.TraceStateString))
             contextItems.Add(CreateContextItem(TracestateKey, activity.TraceStateString!));
 
         return contextItems;
+    }
+
+    private static Activity? EnsureCurrentActivityForTraceContext(bool hasTraceparent)
+    {
+        if (Activity.Current != null || hasTraceparent)
+            return null;
+
+        var activity = OutboundActivitySource.StartActivity(OutboundActivityName, ActivityKind.Producer);
+        if (activity != null)
+            return activity;
+
+        // Keep propagation deterministic even without external listeners.
+        var fallbackActivity = new Activity(OutboundActivityName);
+        fallbackActivity.SetIdFormat(ActivityIdFormat.W3C);
+        fallbackActivity.Start();
+        return fallbackActivity;
     }
 
     private static bool HasContextItem(IEnumerable<ContextItem> items, string key)

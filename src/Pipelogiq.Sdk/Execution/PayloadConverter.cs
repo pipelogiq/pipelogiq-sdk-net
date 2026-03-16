@@ -7,29 +7,14 @@ internal static class PayloadConverter
 {
     public static Dictionary<string, object> FromContextItems(IEnumerable<ContextItem> contextItems)
     {
-        var payload = new Dictionary<string, object>();
+        var payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var contextItem in contextItems)
         {
             if (string.IsNullOrWhiteSpace(contextItem.Key))
                 continue;
-            
-            payload[contextItem.Key] = contextItem.Value.ToString();
 
-            if (string.IsNullOrWhiteSpace(contextItem.ValueType))
-                continue;
-            
-            var type = Type.GetType(contextItem.ValueType);
-            
-            if (type == null)
-                continue;
-
-            var convertedValue = ConvertToType(contextItem.Value, type);
-            if (convertedValue != null)
-            {
-                payload[contextItem.Key] = convertedValue;
-            }
-        
+            payload[contextItem.Key] = DeserializeContextItem(contextItem)!;
         }
 
         return payload;
@@ -40,14 +25,22 @@ internal static class PayloadConverter
         if (payload == null || payload.Count == 0)
             return new List<ContextItem>();
 
-        return payload
-            .Select(x => new ContextItem
+        var contextItems = new List<ContextItem>(payload.Count);
+
+        foreach (var (key, value) in payload)
+        {
+            var valueType = value?.GetType() ?? typeof(object);
+            var valueTypeName = valueType.AssemblyQualifiedName ?? valueType.FullName ?? typeof(object).FullName!;
+
+            contextItems.Add(new ContextItem
             {
-                Key = x.Key,
-                Value = x.Value.ToString() ?? string.Empty,
-                ValueType = x.Value.GetType().AssemblyQualifiedName ?? x.Value.GetType().FullName ?? string.Empty
-            })
-            .ToList();
+                Key = key,
+                Value = JsonSerializer.Serialize(value, valueType),
+                ValueType = valueTypeName
+            });
+        }
+
+        return contextItems;
     }
 
     public static object? DeserializeJson(string json, Type targetType)
@@ -62,27 +55,39 @@ internal static class PayloadConverter
         }
     }
 
-    public static object? ConvertToType(object rawValue, Type targetType)
+    private static object? DeserializeContextItem(ContextItem contextItem)
+    {
+        var type = ResolveType(contextItem.ValueType);
+
+        if (type != null && TryDeserialize(contextItem.Value, type, out var typedValue))
+            return typedValue;
+
+        if (TryDeserialize(contextItem.Value, typeof(object), out var genericValue))
+            return genericValue;
+
+        // Backward-compatible fallback for legacy payloads that were not JSON-serialized.
+        return contextItem.Value;
+    }
+
+    private static Type? ResolveType(string? valueType)
+    {
+        if (string.IsNullOrWhiteSpace(valueType))
+            return null;
+
+        return Type.GetType(valueType);
+    }
+
+    private static bool TryDeserialize(string? json, Type targetType, out object? value)
     {
         try
         {
-            if (rawValue == null)
-                return null;
-
-            if (targetType.IsInstanceOfType(rawValue))
-                return rawValue;
-
-            if (rawValue is JsonElement jsonElement)
-                return jsonElement.Deserialize(targetType);
-
-            if (rawValue is string str && targetType != typeof(string))
-                return JsonSerializer.Deserialize(str, targetType);
-
-            return Convert.ChangeType(rawValue, targetType);
+            value = JsonSerializer.Deserialize(json ?? "null", targetType);
+            return true;
         }
         catch
         {
-            return null;
+            value = null;
+            return false;
         }
     }
 }

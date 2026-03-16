@@ -14,6 +14,7 @@ public class StageExecutor(IServiceProvider serviceProvider)
 {
     private const string TraceparentKey = "traceparent";
     private const string TracestateKey = "tracestate";
+    private const string StageActivityName = "pipelogiq.stage.execute";
     private static readonly ActivitySource StageActivitySource = new("PipelogiqSDK");
 
     /// <summary>
@@ -25,11 +26,14 @@ public class StageExecutor(IServiceProvider serviceProvider)
     {
         var handler = ResolveHandler(data);
         var stageContext = BuildStageContext(data);
-        using var activity = StartStageActivity(handler, data, stageContext);
-        WriteTraceContextToPayload(stageContext, activity);
+        var previousActivity = Activity.Current;
+        Activity? activity = null;
 
         try
         {
+            activity = StartStageActivity(handler, data, stageContext);
+            WriteTraceContextToPayload(stageContext, activity);
+
             var result = await InvokeHandlerAsync(handler, data, stageContext);
             activity?.SetStatus(ActivityStatusCode.Ok);
             WriteTraceContextToPayload(stageContext, activity);
@@ -48,6 +52,11 @@ public class StageExecutor(IServiceProvider serviceProvider)
 
             WriteTraceContextToPayload(stageContext, activity);
             throw;
+        }
+        finally
+        {
+            activity?.Dispose();
+            Activity.Current = previousActivity;
         }
     }
 
@@ -76,24 +85,21 @@ public class StageExecutor(IServiceProvider serviceProvider)
         };
     }
 
-    private static Activity? StartStageActivity(object handler, StageExecutionData data, StageContext stageContext)
+    private static Activity StartStageActivity(object handler, StageExecutionData data, StageContext stageContext)
     {
         var traceparent = stageContext.TryGetValue<string>(TraceparentKey);
         var tracestate = stageContext.TryGetValue<string>(TracestateKey);
 
-        Activity? activity;
+        Activity activity;
         if (!string.IsNullOrWhiteSpace(traceparent) &&
             ActivityContext.TryParse(traceparent, tracestate, out var parentContext))
         {
-            activity = StageActivitySource.StartActivity("pipelogiq.stage.execute", ActivityKind.Consumer, parentContext);
+            activity = StartStageActivityWithParent(parentContext, tracestate);
         }
         else
         {
-            activity = StageActivitySource.StartActivity("pipelogiq.stage.execute", ActivityKind.Consumer);
+            activity = StartRootStageActivity();
         }
-
-        if (activity == null)
-            return null;
 
         activity.SetTag("pipelogiq.stage.id", data.StageId);
         activity.SetTag("pipelogiq.pipeline.id", data.PipelineId);
@@ -103,6 +109,48 @@ public class StageExecutor(IServiceProvider serviceProvider)
             activity.SetTag("pipelogiq.handler.input_type", data.InputType.FullName ?? data.InputType.Name);
 
         return activity;
+    }
+
+    private static Activity StartStageActivityWithParent(ActivityContext parentContext, string? tracestate)
+    {
+        var activity = StageActivitySource.StartActivity(StageActivityName, ActivityKind.Consumer, parentContext);
+        if (activity != null)
+            return activity;
+
+        var fallbackActivity = new Activity(StageActivityName);
+        fallbackActivity.SetIdFormat(ActivityIdFormat.W3C);
+        fallbackActivity.SetParentId(parentContext.TraceId, parentContext.SpanId, parentContext.TraceFlags);
+
+        if (!string.IsNullOrWhiteSpace(parentContext.TraceState))
+            fallbackActivity.TraceStateString = parentContext.TraceState;
+        else if (!string.IsNullOrWhiteSpace(tracestate))
+            fallbackActivity.TraceStateString = tracestate;
+
+        fallbackActivity.Start();
+        return fallbackActivity;
+    }
+
+    private static Activity StartRootStageActivity()
+    {
+        var previousCurrent = Activity.Current;
+        Activity.Current = null;
+
+        try
+        {
+            var activity = StageActivitySource.StartActivity(StageActivityName, ActivityKind.Consumer);
+            if (activity != null)
+                return activity;
+
+            var fallbackActivity = new Activity(StageActivityName);
+            fallbackActivity.SetIdFormat(ActivityIdFormat.W3C);
+            fallbackActivity.Start();
+            return fallbackActivity;
+        }
+        finally
+        {
+            if (Activity.Current == null)
+                Activity.Current = previousCurrent;
+        }
     }
 
     private static void WriteTraceContextToPayload(StageContext stageContext, Activity? activity)

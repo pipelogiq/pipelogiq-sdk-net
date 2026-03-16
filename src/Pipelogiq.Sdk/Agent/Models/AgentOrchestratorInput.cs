@@ -1,0 +1,19 @@
+namespace PipelogiqSDK.Agent.Models;
+
+/// <summary>
+/// Input for the AgentOrchestratorHandler stage.
+/// </summary>
+public class AgentOrchestratorInput
+{
+    /// <summary>The user's natural language message to the agent.</summary>
+    public string Message { get; set; } = null!;
+
+    /// <summary>Optional explicit reply route used for outbound notifications.</summary>
+    public AgentReplyTarget? ReplyTo { get; set; }
+
+    /// <summary>Client session identifier for sending responses back.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>User identifier for context and authorization.</summary>
+    public string? UserId { get; set; }
+}

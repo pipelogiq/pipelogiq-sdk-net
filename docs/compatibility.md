@@ -24,5 +24,7 @@ The SDK is intended for Pipelogiq server deployments that expose the worker and 
 - `POST /workers/heartbeat`
 - `POST /workers/events`
 - `POST /workers/shutdown`
+- `POST /pipelines/{pipelineId}/stages` (dynamic stage append; used by AI agent orchestration)
+- `POST /stages/{stageId}/resume` (approval resume; used by confirmation stages)
 
 Because both platform and SDK are in active preview, validate SDK upgrades against your server environment before production rollout.

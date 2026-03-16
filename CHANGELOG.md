@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Worker no longer stops on startup in `QueueProvisioningMode.AssertOnly` when required RabbitMQ queues are not created yet; it now enters retry loop and reconnects once queues appear.
+- Worker runtime now keeps running after connection/configuration failures and retries reconnection every 10 seconds instead of stopping.
+- Worker now reports `ready` when RabbitMQ connection is up even if only part of StageNext queues are subscribed, and heartbeat metadata now includes active/total/missing StageNext queue counts.
+
 ## [0.1.0] preview - 2026-02-21
 
 ### Added

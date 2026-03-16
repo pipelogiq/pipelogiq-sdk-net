@@ -26,6 +26,9 @@ public class StageResultDto : IStageResult
     public bool RunNextIfCurrentFailed { get; set; }
 
     /// <inheritdoc />
+    public bool IsWaitingForApproval { get; set; }
+
+    /// <inheritdoc />
     public List<StageLogDto>? Logs { get; set; }
 
     /// <inheritdoc />

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PipelogiqSDK.Abstractions;
 using PipelogiqSDK.Api;
@@ -14,8 +13,6 @@ using PipelogiqSDK.StageHelper;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
-using JsonSerializer = System.Text.Json.JsonSerializer;
-
 namespace PipelogiqSDK.Runner;
 
 /// <summary>
@@ -23,12 +20,7 @@ namespace PipelogiqSDK.Runner;
 /// </summary>
 public class PipelineRunner
 {
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(1);
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
     private readonly ILogger<PipelineRunner> _logger;
     private readonly PipelogiqApiClient _apiClient;
     private readonly PipelogiqRunnerOptions _runnerOptions;
@@ -39,6 +31,9 @@ public class PipelineRunner
     private readonly Dictionary<string, Type> _handlerTypes = new();
     private readonly Dictionary<string, IStageHandler> _handlerInstances = new();
     private readonly List<IModel> _consumerChannels = new();
+    private readonly object _queueStatusSync = new();
+    private readonly HashSet<string> _activeStageNextQueues = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _missingStageNextQueues = new(StringComparer.Ordinal);
 
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private readonly Process _process = Process.GetCurrentProcess();
@@ -148,30 +143,46 @@ public class PipelineRunner
 
             try
             {
-                ConnectAndSubscribe(sessionToken);
-                SetState(WorkerStates.Ready, "Worker connected and listening.");
-                await WaitForReconnectSignalAsync(sessionToken);
-            }
-            catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
-            {
-            }
-            catch (WorkerConfigurationException ex)
-            {
-                SetState(WorkerStates.Error, "Worker configuration is invalid.", ex.Message);
-                _logger.LogError(ex, "Worker stopped due to configuration error.");
-                return;
-            }
-            catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
-            {
-                var reason = ex.ShutdownReason?.ReplyText ?? ex.Message;
-                SetState(WorkerStates.Error, "RabbitMQ queue configuration mismatch.", reason);
-                _logger.LogError(ex, "Worker stopped due to RabbitMQ PRECONDITION_FAILED (406).");
-                return;
-            }
-            catch (Exception ex)
-            {
-                SetState(WorkerStates.Degraded, "Broker connection failed.", ex.Message);
-                _logger.LogWarning(ex, "RabbitMQ connection attempt failed.");
+                while (!sessionToken.IsCancellationRequested && !_sessionInvalid)
+                {
+                    try
+                    {
+                        if (ConnectAndSubscribe(sessionToken))
+                        {
+                            SetReadyStateForCurrentConnection();
+                            await WaitForReconnectSignalAsync(sessionToken);
+                        }
+                    }
+                    catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    catch (WorkerConfigurationException ex)
+                    {
+                        SetState(WorkerStates.Degraded, "Worker configuration is invalid.", ex.Message);
+                        _logger.LogWarning(ex, "Worker configuration error. Retrying in {RetryDelay}.", RetryDelay);
+                    }
+                    catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
+                    {
+                        var reason = ex.ShutdownReason?.ReplyText ?? ex.Message;
+                        SetState(WorkerStates.Degraded, "RabbitMQ queue configuration mismatch.", reason);
+                        _logger.LogWarning(ex, "RabbitMQ PRECONDITION_FAILED (406). Retrying in {RetryDelay}.", RetryDelay);
+                    }
+                    catch (Exception ex)
+                    {
+                        SetState(WorkerStates.Degraded, "Broker connection failed.", ex.Message);
+                        _logger.LogWarning(ex, "RabbitMQ connection attempt failed.");
+                    }
+                    finally
+                    {
+                        DisposeMessaging();
+                    }
+
+                    if (sessionToken.IsCancellationRequested || _sessionInvalid)
+                        break;
+
+                    await DelayBeforeRetry(sessionToken);
+                }
             }
             finally
             {
@@ -219,6 +230,7 @@ public class PipelineRunner
             ? PipelineChannels.StageSetStatus
             : bootstrapResponse.Queues.StageSetStatus;
         _stageNextQueues = BuildStageNextQueueNames(supportedHandlers, bootstrapResponse);
+        ResetStageNextQueueCoverage();
 
         SetState(WorkerStates.Starting, "Worker bootstrap completed.");
     }
@@ -307,7 +319,7 @@ public class PipelineRunner
                 await _apiClient.PostWorkerHeartbeatAsync(_workerSessionToken, BuildHeartbeatRequest(), stoppingToken);
 
                 if (_connection?.IsOpen == true)
-                    SetState(WorkerStates.Ready, "Worker connected and listening.");
+                    SetReadyStateForCurrentConnection();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -377,10 +389,17 @@ public class PipelineRunner
         if (!string.IsNullOrWhiteSpace(_bootstrap?.MessageBroker.Type))
             metadata["brokerType"] = _bootstrap.MessageBroker.Type;
 
+        var (activeStageNext, totalStageNext, missingStageNextNames) = SnapshotStageNextQueueCoverage();
+        metadata["stageNextQueuesActive"] = activeStageNext;
+        metadata["stageNextQueuesTotal"] = totalStageNext;
+        metadata["stageNextQueuesMissing"] = Math.Max(0, totalStageNext - activeStageNext);
+        if (missingStageNextNames.Length > 0)
+            metadata["stageNextQueuesMissingNames"] = missingStageNextNames;
+
         return metadata;
     }
 
-    private void ConnectAndSubscribe(CancellationToken stoppingToken)
+    private bool ConnectAndSubscribe(CancellationToken stoppingToken)
     {
         if (_bootstrap is null)
             throw new InvalidOperationException("Worker is not bootstrapped.");
@@ -395,24 +414,28 @@ public class PipelineRunner
 
         _connection = factory.CreateConnection();
         _publishChannel = _connection.CreateModel();
-        EnsureQueueExists(_stageResultQueue);
-        EnsureQueueExists(_stageSetStatusQueue);
+        if (!EnsureQueueExists(_stageResultQueue))
+            return false;
+
+        if (!EnsureQueueExists(_stageSetStatusQueue))
+            return false;
+
+        ResetStageNextQueueCoverage();
 
         var prefetch = (ushort)Math.Clamp(_bootstrap.MessageBroker.Prefetch <= 0 ? 1 : _bootstrap.MessageBroker.Prefetch, 1, ushort.MaxValue);
 
         foreach (var queue in _stageNextQueues)
         {
-            EnsureQueueExists(queue);
+            if (!EnsureQueueExists(queue, markWorkerDegradedOnMissing: false))
+            {
+                MarkStageNextQueueMissing(queue);
+                continue;
+            }
 
-            var consumerChannel = _connection.CreateModel();
-            consumerChannel.BasicQos(0, prefetch, false);
-
-            var consumer = new AsyncEventingBasicConsumer(consumerChannel);
-            consumer.Received += (_, ea) => HandleMessageAsync(consumerChannel, ea, stoppingToken);
-
-            consumerChannel.BasicConsume(queue: queue, autoAck: false, consumer: consumer);
-            _consumerChannels.Add(consumerChannel);
+            SubscribeToStageNextQueue(queue, prefetch, stoppingToken);
         }
+
+        return true;
     }
 
     private async Task WaitForReconnectSignalAsync(CancellationToken stoppingToken)
@@ -427,6 +450,8 @@ public class PipelineRunner
                 SetState(WorkerStates.Degraded, "Broker connection is closed.");
                 return;
             }
+
+            TrySubscribeMissingStageNextQueues(stoppingToken);
 
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
@@ -445,7 +470,7 @@ public class PipelineRunner
         try
         {
             rawMessage = Encoding.UTF8.GetString(delivery.Body.ToArray());
-            parsedMessage = JsonSerializer.Deserialize<StageNextDto>(rawMessage, JsonOptions);
+            parsedMessage = PipelineMessageSerializer.Deserialize<StageNextDto>(rawMessage);
         }
         catch (Exception ex)
         {
@@ -467,7 +492,7 @@ public class PipelineRunner
         Interlocked.Increment(ref _inFlightJobs);
         try
         {
-            _logger.LogInformation("Received StageNext: {Payload}", JsonSerializer.Serialize(parsedMessage));
+            _logger.LogInformation("Received StageNext: {Payload}", PipelineMessageSerializer.Serialize(parsedMessage));
             var isSuccess = await ExecuteAndPublishResult(parsedMessage, stoppingToken);
 
             if (isSuccess)
@@ -520,6 +545,7 @@ public class PipelineRunner
             resultDto.ContextItems = stageResult.ContextItems;
             resultDto.NextStageId = stageResult.NextStageId;
             resultDto.RunNextIfCurrentFailed = stageResult.RunNextIfCurrentFailed;
+            resultDto.IsWaitingForApproval = stageResult.IsWaitingForApproval;
         }
         catch (Exception ex)
         {
@@ -531,8 +557,9 @@ public class PipelineRunner
             resultDto.Logs = logger.Logs;
         }
 
-        _logger.LogInformation("Publishing result for StageId {StageId}: {Payload}", stage.StageId, JsonSerializer.Serialize(resultDto));
-        await PublishToQueueAsync(_stageResultQueue, JsonSerializer.Serialize(resultDto), stoppingToken);
+        var serializedResult = PipelineMessageSerializer.Serialize(resultDto);
+        _logger.LogInformation("Publishing result for StageId {StageId}: {Payload}", stage.StageId, serializedResult);
+        await PublishToQueueAsync(_stageResultQueue, serializedResult, stoppingToken);
 
         return resultDto.IsSuccess;
     }
@@ -594,10 +621,10 @@ public class PipelineRunner
             Status = "Running",
         };
 
-        await PublishToQueueAsync(_stageSetStatusQueue, JsonSerializer.Serialize(data), stoppingToken);
+        await PublishToQueueAsync(_stageSetStatusQueue, PipelineMessageSerializer.Serialize(data), stoppingToken);
     }
 
-    private void EnsureQueueExists(string queueName)
+    private bool EnsureQueueExists(string queueName, bool markWorkerDegradedOnMissing = true)
     {
         if (_connection is null)
             throw new InvalidOperationException("RabbitMQ connection is not available.");
@@ -606,14 +633,25 @@ public class PipelineRunner
         try
         {
             probeChannel.QueueDeclarePassive(queueName);
-            return;
+            return true;
         }
         catch (OperationInterruptedException ex) when (IsQueueNotFound(ex))
         {
             if (_runnerOptions.QueueProvisioningMode == QueueProvisioningMode.AssertOnly)
             {
-                throw new WorkerConfigurationException(
-                    $"Queue '{queueName}' does not exist. QueueProvisioningMode is AssertOnly, so the SDK will not create it.");
+                if (markWorkerDegradedOnMissing)
+                {
+                    SetState(
+                        WorkerStates.Degraded,
+                        "Waiting for RabbitMQ queues to become available.",
+                        $"Queue '{queueName}' does not exist yet.");
+                }
+
+                _logger.LogWarning(
+                    "Queue {QueueName} does not exist yet and QueueProvisioningMode is AssertOnly. Retrying in {RetryDelay}.",
+                    queueName,
+                    RetryDelay);
+                return false;
             }
         }
         catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
@@ -622,7 +660,7 @@ public class PipelineRunner
         }
 
         if (_runnerOptions.QueueProvisioningMode != QueueProvisioningMode.Ensure)
-            return;
+            return false;
 
         using var createChannel = _connection.CreateModel();
         try
@@ -640,6 +678,122 @@ public class PipelineRunner
         }
 
         _logger.LogInformation("Created missing queue {QueueName} using bootstrap DLQ arguments.", queueName);
+        return true;
+    }
+
+    private void SubscribeToStageNextQueue(string queueName, ushort prefetch, CancellationToken stoppingToken)
+    {
+        if (_connection is null || !_connection.IsOpen)
+            throw new InvalidOperationException("RabbitMQ connection is not available.");
+
+        var consumerChannel = _connection.CreateModel();
+        consumerChannel.BasicQos(0, prefetch, false);
+
+        var consumer = new AsyncEventingBasicConsumer(consumerChannel);
+        consumer.Received += (_, ea) => HandleMessageAsync(consumerChannel, ea, stoppingToken);
+
+        consumerChannel.BasicConsume(queue: queueName, autoAck: false, consumer: consumer);
+        _consumerChannels.Add(consumerChannel);
+        MarkStageNextQueueSubscribed(queueName);
+    }
+
+    private void TrySubscribeMissingStageNextQueues(CancellationToken stoppingToken)
+    {
+        if (_connection is null || !_connection.IsOpen)
+            return;
+
+        var missingQueues = SnapshotMissingStageNextQueueNames();
+        if (missingQueues.Length == 0)
+            return;
+
+        var prefetch = (ushort)Math.Clamp(_bootstrap?.MessageBroker.Prefetch <= 0 ? 1 : _bootstrap?.MessageBroker.Prefetch ?? 1, 1, ushort.MaxValue);
+        foreach (var queue in missingQueues)
+        {
+            if (stoppingToken.IsCancellationRequested || _connection is null || !_connection.IsOpen)
+                return;
+
+            if (!EnsureQueueExists(queue, markWorkerDegradedOnMissing: false))
+                continue;
+
+            SubscribeToStageNextQueue(queue, prefetch, stoppingToken);
+            _logger.LogInformation("Subscribed to newly available StageNext queue {QueueName}.", queue);
+            SetReadyStateForCurrentConnection();
+        }
+    }
+
+    private void ResetStageNextQueueCoverage()
+    {
+        lock (_queueStatusSync)
+        {
+            _activeStageNextQueues.Clear();
+            _missingStageNextQueues.Clear();
+            foreach (var queue in _stageNextQueues)
+                _missingStageNextQueues.Add(queue);
+        }
+    }
+
+    private void MarkStageNextQueueSubscribed(string queueName)
+    {
+        lock (_queueStatusSync)
+        {
+            _missingStageNextQueues.Remove(queueName);
+            _activeStageNextQueues.Add(queueName);
+        }
+    }
+
+    private void MarkStageNextQueueMissing(string queueName)
+    {
+        lock (_queueStatusSync)
+        {
+            if (_activeStageNextQueues.Contains(queueName))
+                return;
+
+            _missingStageNextQueues.Add(queueName);
+        }
+    }
+
+    private (int Active, int Total, string[] MissingNames) SnapshotStageNextQueueCoverage()
+    {
+        lock (_queueStatusSync)
+        {
+            return (
+                _activeStageNextQueues.Count,
+                _stageNextQueues.Count,
+                _missingStageNextQueues.OrderBy(queue => queue, StringComparer.Ordinal).ToArray());
+        }
+    }
+
+    private string[] SnapshotMissingStageNextQueueNames()
+    {
+        lock (_queueStatusSync)
+        {
+            return _missingStageNextQueues.OrderBy(queue => queue, StringComparer.Ordinal).ToArray();
+        }
+    }
+
+    private void SetReadyStateForCurrentConnection()
+    {
+        if (_connection is null || !_connection.IsOpen)
+            return;
+
+        var (activeStageNext, totalStageNext, missingStageNextNames) = SnapshotStageNextQueueCoverage();
+        if (totalStageNext == 0)
+        {
+            SetState(WorkerStates.Ready, "Worker connected and listening.");
+            return;
+        }
+
+        if (missingStageNextNames.Length == 0)
+        {
+            SetState(
+                WorkerStates.Ready,
+                $"Worker connected. StageNext subscriptions active: {activeStageNext}/{totalStageNext}.");
+            return;
+        }
+
+        SetState(
+            WorkerStates.Ready,
+            $"Worker connected. StageNext subscriptions active: {activeStageNext}/{totalStageNext}. Waiting for {missingStageNextNames.Length} queue(s).");
     }
 
     private IDictionary<string, object> BuildQueueArguments()
@@ -910,6 +1064,7 @@ public class PipelineRunner
             SafeDispose(channel);
 
         _consumerChannels.Clear();
+        ResetStageNextQueueCoverage();
 
         if (_publishChannel is not null)
         {

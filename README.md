@@ -78,6 +78,11 @@ The SDK automatically captures `traceparent` / `tracestate` from `Activity.Curre
 Manual `traceparent` / `tracestate` values are still respected and not overwritten.
 See `docs/tracing-opentelemetry.md` for examples.
 
+## AI Agent (Preview)
+
+The SDK includes optional AI agent handlers that can orchestrate tool calls as pipeline stages.
+See `docs/ai-agent.md` for setup, confirmation flow, and security notes.
+
 ## Compatibility
 
 - Target framework: `net8.0`
@@ -90,6 +95,7 @@ Details: `docs/compatibility.md`
 - `docs/getting-started.md`
 - `docs/tracing-opentelemetry.md`
 - `docs/compatibility.md`
+- `docs/ai-agent.md`
 - `examples/README.md`
 - `examples/MinimalWorker/README.md`
 - `examples/WorkerAndPipelineHost/README.md`
