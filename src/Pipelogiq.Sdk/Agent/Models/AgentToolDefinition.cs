@@ -87,6 +87,12 @@ public class AgentToolDefinition
     /// </summary>
     public AgentAuthHeaderDefinition? Authentication { get; set; }
 
+    /// <summary>
+    /// Optional human-friendly message shown to the user when this tool is about to be called.
+    /// Overrides <see cref="AgentProgressOptions.ToolCallMessage"/> for this specific tool.
+    /// </summary>
+    public string? ProgressMessage { get; set; }
+
     /// <summary>Returns effective IsMutating value (auto-detect if not set).</summary>
     public bool IsEffectivelyMutating =>
         IsMutating ?? HttpMethod.ToUpperInvariant() is "POST" or "PATCH" or "PUT" or "DELETE";

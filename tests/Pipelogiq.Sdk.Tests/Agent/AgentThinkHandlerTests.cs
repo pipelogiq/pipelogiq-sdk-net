@@ -184,5 +184,7 @@ public sealed class AgentThinkHandlerTests
 
         public AgentToolDefinition? Find(string name) =>
             tools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        public IAgentToolHandler? FindNativeHandler(string name) => null;
     }
 }

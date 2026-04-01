@@ -330,6 +330,8 @@ public sealed class AgentToolHandlerParameterTests
 
         public AgentToolDefinition? Find(string name) =>
             tools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        public IAgentToolHandler? FindNativeHandler(string name) => null;
     }
 
     private sealed class StaticHttpClientFactory(HttpClient httpClient) : IHttpClientFactory

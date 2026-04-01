@@ -7,6 +7,7 @@ using PipelogiqSDK.Agent.Extensions;
 using PipelogiqSDK.Agent.Models;
 using PipelogiqSDK.Api;
 using PipelogiqSDK.Configuration;
+using System.Text;
 
 namespace PipelogiqSDK.Agent.Telegram;
 
@@ -80,7 +81,7 @@ internal sealed class TelegramAgentChannelHostedService(
 
     private async Task HandleMessageAsync(TelegramMessage? message, CancellationToken ct)
     {
-        if (message?.Chat == null || string.IsNullOrWhiteSpace(message.Text))
+        if (message?.Chat == null)
             return;
 
         if (message.From?.IsBot == true)
@@ -93,12 +94,162 @@ internal sealed class TelegramAgentChannelHostedService(
             return;
         }
 
-        var text = message.Text.Trim();
+        // Handle slash commands (text only)
+        var rawText = message.Text?.Trim();
+        if (!string.IsNullOrEmpty(rawText) && rawText.StartsWith('/'))
+        {
+            if (await TryHandleCommandAsync(message, rawText, ct))
+                return;
+        }
 
-        if (await TryHandleCommandAsync(message, text, ct))
+        // Build message text + optional attachments from different Telegram content types
+        var (agentText, attachments) = await BuildAgentInputAsync(message, ct);
+
+        if (string.IsNullOrWhiteSpace(agentText) && attachments.Count == 0)
             return;
 
-        await StartAiPipelineAsync(message, text, ct);
+        await StartAiPipelineAsync(message, agentText, attachments, ct);
+    }
+
+    /// <summary>
+    /// Extracts the agent text and any file attachments from a Telegram message.
+    /// </summary>
+    private async Task<(string Text, List<AgentAttachment> Attachments)> BuildAgentInputAsync(
+        TelegramMessage message, CancellationToken ct)
+    {
+        var attachments = new List<AgentAttachment>();
+
+        // Plain text message
+        if (!string.IsNullOrWhiteSpace(message.Text) && message.Photo == null
+            && message.Document == null && message.Voice == null && message.Audio == null)
+        {
+            return (message.Text.Trim(), attachments);
+        }
+
+        var caption = message.Caption?.Trim() ?? string.Empty;
+
+        // Photo(s) — Telegram provides multiple resolutions; use the last (largest)
+        if (message.Photo is { Length: > 0 })
+        {
+            var photo = message.Photo[^1];
+            if (photo.FileSize == null || photo.FileSize <= options.MaxFileSizeBytes)
+            {
+                var att = await DownloadAttachmentAsync(photo.FileId, "image/jpeg", null, ct);
+                if (att != null) attachments.Add(att);
+            }
+            else
+            {
+                logger.LogInformation("Skipped photo from chat {ChatId}: size {Size} exceeds limit.", message.Chat!.Id, photo.FileSize);
+            }
+
+            var text = string.IsNullOrEmpty(caption) ? "What is in this image?" : caption;
+            return (text, attachments);
+        }
+
+        // Document (PDF, etc.)
+        if (message.Document != null)
+        {
+            var doc = message.Document;
+            if (doc.FileSize <= options.MaxFileSizeBytes)
+            {
+                var mime = doc.MimeType ?? "application/octet-stream";
+                var att = await DownloadAttachmentAsync(doc.FileId, mime, doc.FileName, ct);
+                if (att != null) attachments.Add(att);
+            }
+            else
+            {
+                logger.LogInformation("Skipped document '{File}' from chat {ChatId}: size {Size} exceeds limit.", doc.FileName, message.Chat!.Id, doc.FileSize);
+            }
+
+            var fileName = doc.FileName ?? "document";
+            var text = string.IsNullOrEmpty(caption)
+                ? $"Process the attached file: {fileName}"
+                : caption;
+            return (text, attachments);
+        }
+
+        // Voice message
+        if (message.Voice != null)
+        {
+            var voice = message.Voice;
+            var mime = voice.MimeType ?? "audio/ogg";
+            var durationSec = voice.Duration;
+
+            if (options.VoiceTranscriber != null && (voice.FileSize == null || voice.FileSize <= options.MaxFileSizeBytes))
+            {
+                try
+                {
+                    var filePath = await telegramBotClient.GetFilePathAsync(voice.FileId, ct);
+                    if (!string.IsNullOrEmpty(filePath))
+                    {
+                        var bytes = await telegramBotClient.DownloadFileAsync(filePath, ct);
+                        var transcribed = await options.VoiceTranscriber(bytes, mime, ct);
+                        return (transcribed, attachments);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Voice transcription failed for chat {ChatId}.", message.Chat!.Id);
+                }
+            }
+
+            // No transcriber or transcription failed — pass descriptive text
+            return ($"[Voice message, {durationSec} sec]", attachments);
+        }
+
+        // Audio file
+        if (message.Audio != null)
+        {
+            var audio = message.Audio;
+            var mime = audio.MimeType ?? "audio/mpeg";
+            var fileName = audio.FileName ?? "audio";
+
+            if (options.VoiceTranscriber != null && (audio.FileSize == null || audio.FileSize <= options.MaxFileSizeBytes))
+            {
+                try
+                {
+                    var filePath = await telegramBotClient.GetFilePathAsync(audio.FileId, ct);
+                    if (!string.IsNullOrEmpty(filePath))
+                    {
+                        var bytes = await telegramBotClient.DownloadFileAsync(filePath, ct);
+                        var transcribed = await options.VoiceTranscriber(bytes, mime, ct);
+                        return (string.IsNullOrEmpty(caption) ? transcribed : $"{caption}\n{transcribed}", attachments);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Audio transcription failed for chat {ChatId}.", message.Chat!.Id);
+                }
+            }
+
+            return ($"[Audio file: {fileName}, {audio.Duration} sec]", attachments);
+        }
+
+        return (caption, attachments);
+    }
+
+    private async Task<AgentAttachment?> DownloadAttachmentAsync(
+        string fileId, string mimeType, string? fileName, CancellationToken ct)
+    {
+        try
+        {
+            var filePath = await telegramBotClient.GetFilePathAsync(fileId, ct);
+            if (string.IsNullOrEmpty(filePath)) return null;
+
+            var bytes = await telegramBotClient.DownloadFileAsync(filePath, ct);
+            return new AgentAttachment
+            {
+                Type = AgentAttachment.TypeFromMediaType(mimeType),
+                MediaType = mimeType,
+                Base64Data = Convert.ToBase64String(bytes),
+                FileName = fileName,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to download file {FileId} from Telegram.", fileId);
+            return null;
+        }
     }
 
     private bool IsChatAllowed(long chatId) =>
@@ -149,14 +300,29 @@ internal sealed class TelegramAgentChannelHostedService(
         }
     }
 
-    private async Task StartAiPipelineAsync(TelegramMessage message, string text, CancellationToken ct)
+    private async Task StartAiPipelineAsync(
+        TelegramMessage message,
+        string text,
+        List<AgentAttachment> attachments,
+        CancellationToken ct)
     {
         var chatId = message.Chat!.Id;
         var sessionId = $"tg:{chatId.ToString(CultureInfo.InvariantCulture)}";
-        var userId = message.From?.Id.ToString(CultureInfo.InvariantCulture);
+        var userId = !string.IsNullOrWhiteSpace(message.From?.Username)
+            ? message.From!.Username
+            : message.From?.Id.ToString(CultureInfo.InvariantCulture);
+
+        var input = new AgentOrchestratorInput
+        {
+            Message = text,
+            ReplyTo = AgentReplyTarget.Telegram(chatId),
+            SessionId = sessionId,
+            UserId = userId,
+            Attachments = attachments.Count > 0 ? attachments : null,
+        };
 
         var builder = AgentPipelineBuilderExtensions
-            .CreateAiAgent(text, AgentReplyTarget.Telegram(chatId), sessionId, userId, runnerOptions)
+            .CreateAiAgent(input, runnerOptions)
             .AddKeyword("channel", "telegram")
             .AddKeyword("agent", "true")
             .AddContextItem("telegramChatId", chatId)
@@ -166,11 +332,6 @@ internal sealed class TelegramAgentChannelHostedService(
             builder.AddContextItem("telegramUsername", message.From.Username!);
 
         var response = await PipelineService.StartPipelineAsync(builder, ct);
-
-        await SendMessageSafelyAsync(
-            chatId,
-            $"Request accepted. Pipeline #{response.Id} started.",
-            ct);
 
         logger.LogInformation(
             "Started AI pipeline {PipelineId} from Telegram chat {ChatId}, message {MessageId}.",

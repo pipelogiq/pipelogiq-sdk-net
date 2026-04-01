@@ -1,0 +1,28 @@
+version: "3.9"
+
+# Smart Expense Agent — worker only.
+# Use this when Pipelogiq platform is already running (docker-compose.registry.yml or locally).
+#
+# Usage:
+#   cp .env.example .env    # fill in your keys
+#   docker compose -f docker-compose.agent-only.yml up -d
+#
+# The agent connects to pipelogiq-app via PIPELOGIQ_API_URL in .env.
+
+networks:
+  pipelogiq:
+    external: true
+
+services:
+  expense-agent:
+    build:
+      context: ../../           # repo root (needs src/ and examples/)
+      dockerfile: examples/SmartExpenseAgent/Dockerfile
+    container_name: expense-agent
+    env_file:
+      - .env
+    environment:
+      DOTNET_ENVIRONMENT: Production
+    networks:
+      - pipelogiq
+    restart: unless-stopped

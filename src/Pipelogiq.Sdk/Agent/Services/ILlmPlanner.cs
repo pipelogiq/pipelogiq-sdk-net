@@ -41,5 +41,6 @@ public interface ILlmPlanner
         IReadOnlyList<AgentToolDefinition> tools,
         bool requireConfirmationForMutations,
         string? systemPrompt = null,
+        IReadOnlyList<AgentAttachment>? attachments = null,
         CancellationToken ct = default);
 }

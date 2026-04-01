@@ -1,0 +1,133 @@
+version: "3.9"
+
+# Smart Expense Approval Agent — full local stack
+#
+# Includes the Pipelogiq platform (app + infra) plus the example worker.
+# The worker builds from source on first run.
+#
+# Quick start:
+#   cp .env.example .env          # fill in your keys
+#   docker network create pipelogiq 2>/dev/null || true
+#   docker compose up -d
+#
+# Dashboard: http://localhost:3300
+# Then message your Telegram bot:
+#   "Business lunch with 2 Microsoft clients, €280, project MSFT-2024"
+
+networks:
+  pipelogiq:
+    external: true
+
+# ─── Infrastructure ───────────────────────────────────────────────────────────
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: expense-postgres
+    environment:
+      POSTGRES_USER: pipelogiq
+      POSTGRES_PASSWORD: pipelogiq
+      POSTGRES_DB: pipelogiq
+    ports:
+      - "5441:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - pipelogiq
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipelogiq -d pipelogiq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: expense-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # management UI → http://localhost:15672
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - pipelogiq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ─── Pipelogiq platform ───────────────────────────────────────────────────────
+
+  pipelogiq-app:
+    image: ghcr.io/pipelogiq/pipelogiq-app:latest
+    container_name: expense-pipelogiq-app
+    environment:
+      APP_ID: SmartExpenseAgent
+      DATABASE_URL: postgres://pipelogiq:pipelogiq@postgres:5432/pipelogiq?sslmode=disable
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      HTTP_ADDR: ":8080"
+      EXTERNAL_HTTP_ADDR: ":8081"
+      LIQUIBASE_ENABLED: "true"
+      LIQUIBASE_URL: jdbc:postgresql://postgres:5432/pipelogiq
+      LIQUIBASE_USERNAME: pipelogiq
+      LIQUIBASE_PASSWORD: pipelogiq
+      LIQUIBASE_CHANGELOG_FILE: /app/database/changelog.xml
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "3300:80"    # dashboard
+      - "8081:8081"  # external API (SDK connects here)
+    networks:
+      - pipelogiq
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  pipelogiq-worker:
+    image: ghcr.io/pipelogiq/pipelogiq-worker:latest
+    container_name: expense-pipelogiq-worker
+    environment:
+      APP_ID: SmartExpenseAgent
+      DATABASE_URL: postgres://pipelogiq:pipelogiq@postgres:5432/pipelogiq?sslmode=disable
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      LOG_LEVEL: info
+    depends_on:
+      pipelogiq-app:
+        condition: service_healthy
+    networks:
+      - pipelogiq
+    restart: unless-stopped
+
+# ─── Smart Expense Agent worker ───────────────────────────────────────────────
+
+  expense-agent:
+    build:
+      context: ../../           # repo root (needs access to src/ and examples/)
+      dockerfile: examples/SmartExpenseAgent/Dockerfile
+    container_name: expense-agent
+    env_file:
+      - .env                    # copy from .env.example and fill in your keys
+    environment:
+      # Override API URL to reach pipelogiq-app inside Docker network
+      PIPELOGIQ_API_URL: http://pipelogiq-app:8081
+      DOTNET_ENVIRONMENT: Production
+    depends_on:
+      pipelogiq-app:
+        condition: service_healthy
+    networks:
+      - pipelogiq
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  rabbitmq-data:

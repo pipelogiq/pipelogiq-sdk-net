@@ -54,6 +54,12 @@ public interface IStageResult
     bool IsSuccess { get; set; }
 
     /// <summary>
+    /// Gets or sets an optional error code reported on failure (e.g. "RATE_LIMIT_EXCEEDED",
+    /// "TIMEOUT", "UPSTREAM_ERROR"). Used by retry policies to decide whether to retry.
+    /// </summary>
+    string? ErrorCode { get; set; }
+
+    /// <summary>
     /// Gets or sets the next stage identifier.
     /// </summary>
     int? NextStageId { get; set; }

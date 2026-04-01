@@ -51,8 +51,16 @@ public static class AgentServiceExtensions
     internal static void EnsureAgentServicesRegistered(IServiceCollection services, AgentOptions options)
     {
         services.TryAddSingleton(options);
-        services.TryAddSingleton<IAgentToolRegistry, AgentToolRegistry>();
+        services.TryAddSingleton<IAgentToolRegistry>(sp =>
+        {
+            var registry = new AgentToolRegistry(options);
+            foreach (var (name, handler) in options.NativeHandlers)
+                registry.RegisterNativeHandler(name, handler);
+            return registry;
+        });
         services.TryAddSingleton<IAgentNotificationRouter, AgentNotificationRouter>();
+        services.TryAddSingleton<IAgentMemoryStore, InMemoryAgentMemoryStore>();
+        services.TryAddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
 
         services.TryAddTransient<AgentOrchestratorHandler>();
         services.TryAddTransient<AgentToolHandler>();
@@ -126,6 +134,22 @@ public class AgentBuilder(AgentOptions options)
     public AgentBuilder AddTools(IEnumerable<AgentToolDefinition> tools)
     {
         options.Tools.AddRange(tools);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a native tool handler that executes .NET code instead of making an HTTP call.
+    /// </summary>
+    /// <param name="definition">Tool metadata shown to the LLM (name, description, parameters).</param>
+    /// <param name="handler">The handler instance that contains the tool logic.</param>
+    public AgentBuilder AddNativeTool(AgentToolDefinition definition, IAgentToolHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentException.ThrowIfNullOrWhiteSpace(definition.Name);
+
+        options.Tools.Add(definition);
+        options.NativeHandlers[definition.Name] = handler;
         return this;
     }
 

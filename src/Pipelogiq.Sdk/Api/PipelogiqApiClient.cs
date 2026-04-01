@@ -157,6 +157,17 @@ public class PipelogiqApiClient : BaseApiClient
     }
 
     /// <summary>
+    /// Gets pipeline details including current status, stages, and context items.
+    /// </summary>
+    /// <param name="pipelineId">Pipeline identifier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Pipeline detail response.</returns>
+    public Task<PipelineResponse> GetPipelineAsync(int pipelineId, CancellationToken ct = default)
+    {
+        return GetAsync<PipelineResponse>($"pipelines/{pipelineId}", ct);
+    }
+
+    /// <summary>
     /// Resumes a stage that is waiting for external approval.
     /// </summary>
     /// <param name="stageId">Stage identifier to resume.</param>

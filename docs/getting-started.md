@@ -79,3 +79,60 @@ await runner.StartAsync(CancellationToken.None);
 ```
 
 A runnable version of this setup is available in `examples/MinimalWorker`.
+
+## Reporting structured errors
+
+When a stage fails, return a result with an `ErrorCode` so that server-side retry policies can decide whether to retry based on the specific failure kind:
+
+```csharp
+public Task<IStageResult> ExecuteAsync(MyInput input, IStageContext? context = null)
+{
+    try
+    {
+        var response = await _httpClient.PostAsync(...);
+
+        if ((int)response.StatusCode == 429)
+            return Task.FromResult<IStageResult>(
+                StageResult.RateLimitExceeded("API rate limit exceeded"));
+
+        if (!response.IsSuccessStatusCode)
+            return Task.FromResult<IStageResult>(
+                StageResult.UpstreamError($"Upstream returned {response.StatusCode}"));
+
+        return Task.FromResult<IStageResult>(StageResult.Success("ok"));
+    }
+    catch (TaskCanceledException)
+    {
+        return Task.FromResult<IStageResult>(StageResult.Timeout("Request timed out"));
+    }
+}
+```
+
+Built-in factory helpers and their error codes:
+
+| Helper | `ErrorCode` |
+|--------|-------------|
+| `StageResult.RateLimitExceeded(msg)` | `RATE_LIMIT_EXCEEDED` |
+| `StageResult.Timeout(msg)` | `TIMEOUT` |
+| `StageResult.UpstreamError(msg)` | `UPSTREAM_ERROR` |
+| `StageResult.Error(msg, code)` | any string you define |
+
+On the server side, configure a retry policy with `retryOn.errorCodes` to target specific codes:
+
+```json
+{
+  "type": "retry",
+  "rule": {
+    "maxAttempts": 5,
+    "backoff": "exponential",
+    "baseDelayMs": 1000,
+    "maxDelayMs": 60000,
+    "jitter": true,
+    "retryOn": {
+      "errorCodes": ["RATE_LIMIT_EXCEEDED", "TIMEOUT"]
+    }
+  }
+}
+```
+
+Stages that fail with an error code not in the list (e.g. a validation error) are marked `Failed` immediately without retrying.

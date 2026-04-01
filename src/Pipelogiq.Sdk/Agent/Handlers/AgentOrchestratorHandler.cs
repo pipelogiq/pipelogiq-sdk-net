@@ -5,6 +5,7 @@ using PipelogiqSDK.Agent.Services;
 using PipelogiqSDK.Api;
 using PipelogiqSDK.Contracts;
 using PipelogiqSDK.StageHelper;
+using System.Net;
 
 namespace PipelogiqSDK.Agent.Handlers;
 
@@ -18,6 +19,9 @@ public class AgentOrchestratorHandler(
     AgentOptions agentOptions,
     PipelogiqApiClient apiClient) : IStageHandler<AgentOrchestratorInput>
 {
+    private const int RateLimitRetryIntervalSeconds = 120;
+    private const int RateLimitMaxRetries = 30;
+
     /// <inheritdoc />
     public async Task<IStageResult> ExecuteAsync(AgentOrchestratorInput input, IStageContext? context = null)
     {
@@ -31,6 +35,8 @@ public class AgentOrchestratorHandler(
         SetContextValue(context, AgentConstants.SessionId, input.SessionId ?? string.Empty);
         SetContextValue(context, AgentConstants.UserId, input.UserId ?? string.Empty);
         SetContextValue(context, AgentConstants.ToolResults, new List<AgentToolResult>());
+        if (input.Attachments?.Count > 0)
+            SetContextValue(context, AgentConstants.Attachments, input.Attachments);
 
         // ReAct mode: hand off to AgentThinkHandler loop — no upfront planning
         if (agentOptions.UseReActMode)
@@ -40,7 +46,15 @@ public class AgentOrchestratorHandler(
 
             var thinkRequest = new AppendStagesRequest
             {
-                Stages = [new StageInfo { StageName = "agent:think", StageHandlerName = AgentConstants.ThinkHandlerName }]
+                Stages =
+                [
+                    new StageInfo
+                    {
+                        StageName = "agent:think",
+                        StageHandlerName = AgentConstants.ThinkHandlerName,
+                        Options = BuildRateLimitRetryOptions(),
+                    }
+                ]
             };
             await apiClient.AppendAgentStagesAsync(pipelineId, thinkRequest);
 
@@ -49,7 +63,16 @@ public class AgentOrchestratorHandler(
 
         // Plan-and-execute mode: LLM plans all tool calls upfront
         var tools = toolRegistry.GetAll();
-        var plan = await llmPlanner.PlanAsync(input.Message, tools, agentOptions.SystemPrompt);
+        AgentPlan plan;
+        try
+        {
+            plan = await llmPlanner.PlanAsync(input.Message, tools, agentOptions.SystemPrompt);
+        }
+        catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))
+        {
+            return StageResult.RateLimitExceeded(
+                $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
+        }
 
         if (!plan.HasToolCalls)
         {
@@ -161,4 +184,13 @@ public class AgentOrchestratorHandler(
         context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         context.Payload[key] = value;
     }
+
+    private static StageOptions BuildRateLimitRetryOptions() => new()
+    {
+        RetryInterval = RateLimitRetryIntervalSeconds,
+        MaxRetries = RateLimitMaxRetries,
+    };
+
+    private static bool IsAnthropicRateLimit(HttpRequestException ex)
+        => ex.StatusCode == HttpStatusCode.TooManyRequests;
 }

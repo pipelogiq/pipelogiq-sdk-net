@@ -10,7 +10,8 @@ namespace PipelogiqSDK.Agent.Handlers;
 /// </summary>
 public class AgentResponderHandler(
     ILlmPlanner llmPlanner,
-    IAgentNotificationRouter? notificationRouter = null) : IStageHandler
+    IAgentNotificationRouter? notificationRouter = null,
+    IAgentSessionStore? sessionStore = null) : IStageHandler
 {
     /// <inheritdoc />
     public async Task<IStageResult> ExecuteAsync(IStageContext? context = null)
@@ -19,20 +20,57 @@ public class AgentResponderHandler(
 
         // Check if there's a direct answer (no tool calls needed or rejection message)
         var directAnswer = context.TryGetValue<string>("agent:directAnswer");
+        string responseText;
         if (!string.IsNullOrWhiteSpace(directAnswer))
         {
-            return await SendOrFallbackAsync(context, directAnswer);
+            responseText = directAnswer;
+        }
+        else
+        {
+            // Synthesize response from tool results
+            var toolResults = context.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults)
+                              ?? new List<AgentToolResult>();
+
+            responseText = toolResults.Count > 0
+                ? await llmPlanner.SynthesizeAsync(originalMessage, toolResults)
+                : "The request has been processed.";
         }
 
-        // Synthesize response from tool results
-        var toolResults = context.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults)
-                          ?? new List<AgentToolResult>();
+        var result = await SendOrFallbackAsync(context, responseText);
 
-        var responseText = toolResults.Count > 0
-            ? await llmPlanner.SynthesizeAsync(originalMessage, toolResults)
-            : "The request has been processed.";
+        // Save conversation history for multi-turn continuity.
+        // The next user message from the same session will load this history
+        // and the agent will understand the context without starting over.
+        await SaveSessionHistoryAsync(context, originalMessage, responseText);
 
-        return await SendOrFallbackAsync(context, responseText);
+        return result;
+    }
+
+    private async Task SaveSessionHistoryAsync(IStageContext? context, string originalMessage, string finalResponse)
+    {
+        if (sessionStore == null) return;
+
+        var sessionId = context.TryGetValue<string>(AgentConstants.SessionId);
+        if (string.IsNullOrEmpty(sessionId)) return;
+
+        // awaitingReply = true  → agent asked a question, keep session so the
+        //                          next user message continues the conversation.
+        // awaitingReply = false → task completed (or not set), clear the session
+        //                          so the next message starts completely fresh.
+        var history = context.TryGetValue<List<AgentConversationTurn>>(AgentConstants.ConversationHistory)
+                      ?? new List<AgentConversationTurn>();
+
+        var toSave = new List<AgentConversationTurn>();
+
+        // If history doesn't start with user_message turns, this was a fresh pipeline —
+        // wrap the think-loop turns with proper user_message / assistant_response bookends.
+        if (history.Count == 0 || history[0].Type != "user_message")
+            toSave.Add(new AgentConversationTurn { Type = "user_message", Content = originalMessage });
+
+        toSave.AddRange(history);
+        toSave.Add(new AgentConversationTurn { Type = "assistant_response", Content = finalResponse });
+
+        await sessionStore.SaveAsync(sessionId, toSave);
     }
 
     private async Task<IStageResult> SendOrFallbackAsync(IStageContext? context, string message)

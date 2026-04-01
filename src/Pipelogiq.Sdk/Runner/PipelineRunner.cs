@@ -542,6 +542,7 @@ public class PipelineRunner
 
             resultDto.Result = stageResult.Result;
             resultDto.IsSuccess = stageResult.IsSuccess;
+            resultDto.ErrorCode = stageResult.ErrorCode;
             resultDto.ContextItems = stageResult.ContextItems;
             resultDto.NextStageId = stageResult.NextStageId;
             resultDto.RunNextIfCurrentFailed = stageResult.RunNextIfCurrentFailed;

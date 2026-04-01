@@ -62,6 +62,27 @@ internal sealed class TelegramBotClient(
         }
     }
 
+    /// <summary>
+    /// Resolves a Telegram file_id to a download path via the getFile API.
+    /// </summary>
+    public async Task<string?> GetFilePathAsync(string fileId, CancellationToken ct = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            "getFile", new { file_id = fileId }, JsonOptions, ct);
+        var payload = await ReadPayloadAsync<TelegramApiResponse<TelegramFile>>(response, ct);
+        return payload.Ok ? payload.Result?.FilePath : null;
+    }
+
+    /// <summary>
+    /// Downloads a file from Telegram given its file_path (returned by getFile).
+    /// </summary>
+    public async Task<byte[]> DownloadFileAsync(string filePath, CancellationToken ct = default)
+    {
+        var token = options.TelegramBotToken;
+        var url = $"https://api.telegram.org/file/bot{token}/{filePath}";
+        return await _httpClient.GetByteArrayAsync(url, ct);
+    }
+
     private static async Task<T> ReadPayloadAsync<T>(HttpResponseMessage response, CancellationToken ct)
     {
         var rawBody = await response.Content.ReadAsStringAsync(ct);
@@ -136,6 +157,94 @@ internal sealed class TelegramMessage
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }
+
+    [JsonPropertyName("caption")]
+    public string? Caption { get; set; }
+
+    /// <summary>Array of photo sizes (Telegram sends multiple resolutions). Use the last (largest).</summary>
+    [JsonPropertyName("photo")]
+    public TelegramPhotoSize[]? Photo { get; set; }
+
+    [JsonPropertyName("document")]
+    public TelegramDocument? Document { get; set; }
+
+    [JsonPropertyName("voice")]
+    public TelegramVoice? Voice { get; set; }
+
+    [JsonPropertyName("audio")]
+    public TelegramAudio? Audio { get; set; }
+}
+
+internal sealed class TelegramPhotoSize
+{
+    [JsonPropertyName("file_id")]
+    public string FileId { get; set; } = string.Empty;
+
+    [JsonPropertyName("file_size")]
+    public long? FileSize { get; set; }
+
+    [JsonPropertyName("width")]
+    public int Width { get; set; }
+
+    [JsonPropertyName("height")]
+    public int Height { get; set; }
+}
+
+internal sealed class TelegramDocument
+{
+    [JsonPropertyName("file_id")]
+    public string FileId { get; set; } = string.Empty;
+
+    [JsonPropertyName("file_name")]
+    public string? FileName { get; set; }
+
+    [JsonPropertyName("mime_type")]
+    public string? MimeType { get; set; }
+
+    [JsonPropertyName("file_size")]
+    public long? FileSize { get; set; }
+}
+
+internal sealed class TelegramVoice
+{
+    [JsonPropertyName("file_id")]
+    public string FileId { get; set; } = string.Empty;
+
+    [JsonPropertyName("mime_type")]
+    public string? MimeType { get; set; }
+
+    [JsonPropertyName("duration")]
+    public int Duration { get; set; }
+
+    [JsonPropertyName("file_size")]
+    public long? FileSize { get; set; }
+}
+
+internal sealed class TelegramAudio
+{
+    [JsonPropertyName("file_id")]
+    public string FileId { get; set; } = string.Empty;
+
+    [JsonPropertyName("file_name")]
+    public string? FileName { get; set; }
+
+    [JsonPropertyName("mime_type")]
+    public string? MimeType { get; set; }
+
+    [JsonPropertyName("duration")]
+    public int Duration { get; set; }
+
+    [JsonPropertyName("file_size")]
+    public long? FileSize { get; set; }
+}
+
+internal sealed class TelegramFile
+{
+    [JsonPropertyName("file_id")]
+    public string FileId { get; set; } = string.Empty;
+
+    [JsonPropertyName("file_path")]
+    public string? FilePath { get; set; }
 }
 
 internal sealed class TelegramChat

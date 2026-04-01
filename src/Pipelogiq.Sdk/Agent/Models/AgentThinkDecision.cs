@@ -40,4 +40,7 @@ public class AgentThinkDecision
     /// Stored in conversation history so subsequent think steps can replay it accurately.
     /// </summary>
     public string? RawDecisionJson { get; set; }
+
+    /// <summary>Token usage for this think step (null if provider does not report usage).</summary>
+    public AgentLlmUsage? TokenUsage { get; set; }
 }

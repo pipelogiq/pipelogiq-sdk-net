@@ -123,6 +123,73 @@ services.AddPipelogiqAgent(agent =>
 
 No `LlmApiKey` is required for a default local Ollama instance.
 
+## Native Tools
+
+Register a C# method as a tool instead of an HTTP call using `AddNativeTool`. The LLM sees the same JSON Schema description; only the execution is local code.
+
+### Untyped handler
+
+Implement `IAgentToolHandler` directly when you need access to raw parameters:
+
+```csharp
+public class CalculateDiscountHandler : IAgentToolHandler
+{
+    public Task<AgentToolOutput> ExecuteAsync(
+        IReadOnlyDictionary<string, object?> parameters,
+        IStageContext? context = null,
+        CancellationToken ct = default)
+    {
+        var price   = Convert.ToDecimal(parameters["price"]);
+        var percent = Convert.ToDecimal(parameters["percent"]);
+        var amount  = Math.Round(price * percent / 100, 2);
+        return Task.FromResult(AgentToolOutput.Success(amount.ToString("F2")));
+    }
+}
+```
+
+### Typed handler (recommended)
+
+Extend `AgentToolHandlerBase<TInput>` and let the SDK deserialize parameters into your model:
+
+```csharp
+public record DiscountInput(decimal Price, decimal Percent);
+
+public class CalculateDiscountHandler : AgentToolHandlerBase<DiscountInput>
+{
+    protected override Task<AgentToolOutput> ExecuteAsync(
+        DiscountInput input,
+        IStageContext? context = null,
+        CancellationToken ct = default)
+    {
+        var amount = Math.Round(input.Price * input.Percent / 100, 2);
+        return Task.FromResult(AgentToolOutput.Success(amount.ToString("F2")));
+    }
+}
+```
+
+### Registration
+
+```csharp
+agentBuilder.AddNativeTool(
+    new AgentToolDefinition
+    {
+        Name        = "calculateDiscount",
+        Description = "Calculates the discount amount given the price and the discount percentage",
+        Params = new()
+        {
+            ["price"]   = new AgentToolParam { Type = "number", Description = "Item price",       Required = true },
+            ["percent"] = new AgentToolParam { Type = "number", Description = "Discount percent", Required = true },
+        }
+    },
+    new CalculateDiscountHandler());
+```
+
+Native tools:
+- Have full access to `IStageContext` — read/write shared pipeline state and context items
+- Can use injected services (pass them through the handler constructor)
+- Return `AgentToolOutput.Success(outputString)` or `AgentToolOutput.Failure(errorMessage)`
+- Are dispatched before HTTP tools — if a native handler is registered for a tool name, the HTTP fallback is never called
+
 ## Multiple APIs And Personalized Headers
 
 - Register each external API once via `AddTargetApi(...)`.
@@ -150,6 +217,140 @@ If a tool defines rich `Params` (`AgentToolParam`), `AgentToolHandler` validates
 - strict unknown-parameter rejection
 - type coercion (`integer`, `number`, `boolean`, `array`, `object`, `string`)
 - optional format checks (`date`, `date-time`, `time`, `uuid`, `email`, `url`)
+
+## Handling Rate Limits and Cost
+
+LLM APIs enforce request-per-minute and token-per-minute quotas. Rather than building retry logic inside each handler, report the failure with a structured `ErrorCode` and let the platform retry automatically with exponential backoff.
+
+```csharp
+// In any agent handler that calls an LLM API directly
+catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
+{
+    return StageResult.RateLimitExceeded($"Rate limit hit: {ex.Message}");
+}
+catch (TaskCanceledException)
+{
+    return StageResult.Timeout("LLM call timed out");
+}
+```
+
+Then create a retry policy in the dashboard (or via API) targeting the handler:
+
+```json
+{
+  "name": "llm-rate-limit-retry",
+  "type": "retry",
+  "targeting": {
+    "handlers": ["AgentThinkHandler", "AgentToolHandler"]
+  },
+  "rule": {
+    "maxAttempts": 6,
+    "backoff": "exponential",
+    "baseDelayMs": 2000,
+    "maxDelayMs": 120000,
+    "jitter": true,
+    "retryOn": {
+      "errorCodes": ["RATE_LIMIT_EXCEEDED", "TIMEOUT"]
+    }
+  }
+}
+```
+
+This configuration retries up to 6 times with delays of ~2 s, ~4 s, ~8 s, ~16 s, ~32 s, capped at 120 s, with ±10% jitter. Stages that fail for other reasons (e.g. `UPSTREAM_ERROR` or validation failures) are failed immediately without consuming retries.
+
+## Model Routing
+
+Use `AgentModelRouter` to send different LLM operations to different models — cheaper models for planning and synthesis, full-power model for reasoning:
+
+```csharp
+services.AddPipelogiqAgent(agent =>
+{
+    agent.LlmProvider = AgentLlmProvider.Anthropic;
+    agent.LlmApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    agent.LlmModel = "claude-opus-4-6";           // default for think steps
+    agent.UseReActMode = true;
+
+    agent.ModelRouter = new AgentModelRouter
+    {
+        PlanModel     = "claude-haiku-4-5-20251001", // cheap fast planning
+        ThinkModel    = "claude-opus-4-6",            // full reasoning power
+        SynthesizeModel = "claude-haiku-4-5-20251001" // cheap summarisation
+    };
+});
+```
+
+Any unset property falls back to `agent.LlmModel`.
+
+## Prompt Caching and Token Budget
+
+Enable Anthropic prompt caching to reduce costs on repeated calls (same system prompt + tools):
+
+```csharp
+services.AddPipelogiqAgent(agent =>
+{
+    agent.LlmProvider = AgentLlmProvider.Anthropic;
+    agent.LlmApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+
+    agent.TokenBudget = new AgentTokenBudget
+    {
+        EnablePromptCaching     = true,    // default: true; adds cache_control breakpoints
+        MaxInputTokensPerSession = 200_000, // stop before this total input token count
+        MaxCostUsdPerSession     = 0.50m,  // stop if session cost exceeds $0.50
+    };
+});
+```
+
+When `EnablePromptCaching` is true, the SDK:
+- Sends `anthropic-beta: prompt-caching-2024-07-31` on every Anthropic call
+- Wraps the system prompt in a `cache_control: ephemeral` block
+- Adds `cache_control` to the last tool in the tools list
+
+Cached tokens cost ~10% of normal input tokens. Token and cost accumulators are tracked per session in pipeline context under:
+
+| Context key | Description |
+|-------------|-------------|
+| `agent:session:inputTokens` | Total input tokens used this session |
+| `agent:session:outputTokens` | Total output tokens generated |
+| `agent:session:cacheReadTokens` | Tokens served from cache |
+| `agent:session:cacheCreationTokens` | Tokens written to cache |
+| `agent:session:estimatedCostUsd` | Running cost estimate in USD |
+
+## Long-Term Memory
+
+Register an `IAgentMemoryStore` to recall facts across sessions:
+
+```csharp
+// Default: in-memory store (single process, non-persistent)
+// No extra registration needed — InMemoryAgentMemoryStore is registered automatically.
+
+// For persistent memory, replace the default:
+services.AddSingleton<IAgentMemoryStore, MyPostgresAgentMemoryStore>();
+```
+
+The `AgentThinkHandler` automatically calls `RecallAsync` before each think step and injects relevant memories into the system prompt. Store new memories from your own handlers:
+
+```csharp
+public class AfterOrderHandler(IAgentMemoryStore memory) : IStageHandler
+{
+    public async Task<IStageResult> ExecuteAsync(IStageContext? context = null)
+    {
+        var sessionId = context.TryGetValue<string>("agent:sessionId") ?? string.Empty;
+        await memory.StoreAsync(new AgentMemoryEntry
+        {
+            SessionId = sessionId,
+            Category  = "preference",
+            Content   = "User prefers metric units.",
+        });
+        return StageResult.Success("memory stored");
+    }
+}
+```
+
+## Progress Notifications
+
+The `AgentThinkHandler` emits `"progress"` notifications before each think step and before each tool call. These flow through the same `IAgentNotificationRouter` used for final responses.
+
+For Telegram, progress messages appear instantly in the chat as the agent works. For your own channel, receive them in your `IAgentNotificationChannel` implementation (filter on `notification.Type == "progress"`).
 
 ## Security Notes
 

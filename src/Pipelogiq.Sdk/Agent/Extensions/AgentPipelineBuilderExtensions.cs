@@ -9,6 +9,9 @@ namespace PipelogiqSDK.Agent.Extensions;
 /// </summary>
 public static class AgentPipelineBuilderExtensions
 {
+    private const int RateLimitRetryIntervalSeconds = 120;
+    private const int RateLimitMaxRetries = 30;
+
     /// <summary>
     /// Creates an AI agent pipeline for the given user message.
     /// The SDK automatically appends tool call stages, confirmation, and response stages
@@ -35,11 +38,27 @@ public static class AgentPipelineBuilderExtensions
             UserId = userId,
         };
 
+        return CreateAiAgent(input, options);
+    }
+
+    /// <summary>
+    /// Creates an AI agent pipeline from a fully-configured <see cref="AgentOrchestratorInput"/>.
+    /// Use this overload when you need to pass attachments (images, PDFs, audio).
+    /// </summary>
+    public static PipelineBuilder CreateAiAgent(
+        AgentOrchestratorInput input,
+        PipelogiqRunnerOptions? options = null)
+    {
         return PipelineBuilder
             .Create("ai-agent", options)
             .WithAction(
                 stageName: "agent:orchestrator",
                 stageHandlerName: AgentConstants.OrchestratorHandlerName,
-                input: input);
+                input: input,
+                options: new PipelogiqSDK.Contracts.StageOptions
+                {
+                    RetryInterval = RateLimitRetryIntervalSeconds,
+                    MaxRetries = RateLimitMaxRetries,
+                });
     }
 }

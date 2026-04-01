@@ -15,4 +15,7 @@ public class AgentPlan
 
     /// <summary>Whether the plan requires any tool calls.</summary>
     public bool HasToolCalls => ToolCalls.Count > 0;
+
+    /// <summary>Token usage for this plan call (null if provider does not report usage).</summary>
+    public AgentLlmUsage? TokenUsage { get; set; }
 }

@@ -5,6 +5,7 @@ using PipelogiqSDK.Agent.Services;
 using PipelogiqSDK.Api;
 using PipelogiqSDK.Contracts;
 using PipelogiqSDK.StageHelper;
+using System.Net;
 using System.Text.Json;
 
 namespace PipelogiqSDK.Agent.Handlers;
@@ -21,8 +22,14 @@ public class AgentThinkHandler(
     ILlmPlanner llmPlanner,
     IAgentToolRegistry toolRegistry,
     AgentOptions agentOptions,
-    PipelogiqApiClient apiClient) : IStageHandler
+    PipelogiqApiClient apiClient,
+    IAgentNotificationRouter? notificationRouter = null,
+    IAgentMemoryStore? memoryStore = null,
+    IAgentSessionStore? sessionStore = null) : IStageHandler
 {
+    private const int RateLimitRetryIntervalSeconds = 120;
+    private const int RateLimitMaxRetries = 30;
+
     /// <inheritdoc />
     public async Task<IStageResult> ExecuteAsync(IStageContext? context = null)
     {
@@ -42,7 +49,19 @@ public class AgentThinkHandler(
             return StageResult.Success($"Max think steps ({agentOptions.MaxThinkSteps}) reached — responder appended.");
         }
 
+        // Ask LLM for next action — declare early so it's available to session loading below
+        var originalMessage = context.TryGetValue<string>(AgentConstants.OriginalMessage) ?? string.Empty;
+
         var history = GetOrCreateHistory(context);
+
+        // On the very first think step of a fresh pipeline, check whether there is
+        // saved conversation history from a previous pipeline in the same session.
+        // If found, inject it so the LLM sees the full multi-turn context.
+        if (stepCount == 1 && history.Count == 0)
+        {
+            history = await LoadSessionHistoryAsync(originalMessage, context) ?? history;
+            SetContextValue(context, AgentConstants.ConversationHistory, history);
+        }
 
         // Handle post-confirmation resume: approved/rejected decision is in context
         var approved = context.TryGetValue<bool?>(AgentConstants.ApprovalDecision);
@@ -65,20 +84,68 @@ public class AgentThinkHandler(
                 return StageResult.Success("Confirmation rejected — responder appended.");
             }
 
+            // Approved — extract ApprovedMutations from the last confirmation_requested turn
+            // so TryConsumeApprovedMutation can match them and skip re-confirmation.
+            ExtractAndSetApprovedMutations(history, context);
+
             // Clear approval flag so next think step starts fresh
             context.Payload!.Remove(AgentConstants.ApprovalDecision);
         }
 
-        // Ask LLM for next action
-        var originalMessage = context.TryGetValue<string>(AgentConstants.OriginalMessage) ?? string.Empty;
         var tools = toolRegistry.GetAll();
 
-        var decision = await llmPlanner.ThinkAsync(
-            originalMessage,
-            history,
-            tools,
-            agentOptions.RequireConfirmationForMutations,
-            agentOptions.SystemPrompt);
+        // Check for tool loop: if any single tool has failed 3 times in a row,
+        // stop reasoning and let the agent apologise to the user instead of looping.
+        var loopingTool = DetectToolLoop(context);
+        if (loopingTool != null)
+        {
+            SetContextValue(context, "agent:directAnswer",
+                $"I'm sorry, I was unable to complete this step — the tool '{loopingTool}' " +
+                "failed repeatedly. Please try again or rephrase your request.");
+            await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+            return StageResult.Error($"Tool loop detected for '{loopingTool}' — responder appended.", "TOOL_LOOP");
+        }
+
+        // Check token budget before calling the LLM
+        if (IsTokenBudgetExceeded(context))
+        {
+            SetContextValue(context, "agent:directAnswer",
+                "The agent stopped because the token or cost budget for this session was exceeded.");
+            await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+            return StageResult.Error("Token budget exceeded — responder appended.", "BUDGET_EXCEEDED");
+        }
+
+        // Emit progress notification
+        await SendThinkingProgressAsync(context, stepCount);
+
+        // Recall long-term memories and inject context values into system prompt
+        var systemPrompt = await BuildSystemPromptWithMemoryAsync(originalMessage, context);
+
+        // Attachments (images, PDFs) are only relevant on the first think step.
+        // On subsequent steps the conversation history already carries full context.
+        var attachments = stepCount == 1
+            ? context.TryGetValue<List<AgentAttachment>>(AgentConstants.Attachments)
+            : null;
+
+        AgentThinkDecision decision;
+        try
+        {
+            decision = await llmPlanner.ThinkAsync(
+                originalMessage,
+                history,
+                tools,
+                agentOptions.RequireConfirmationForMutations,
+                systemPrompt,
+                attachments);
+        }
+        catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))
+        {
+            return StageResult.RateLimitExceeded(
+                $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
+        }
+
+        // Accumulate token usage in context
+        AccumulateTokenUsage(context, decision.TokenUsage);
 
         if (decision.Action == AgentThinkAction.CallTool &&
             decision.ToolCall != null &&
@@ -144,6 +211,7 @@ public class AgentThinkHandler(
         });
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
+        await SendToolCallProgressAsync(context, call.Tool);
         await AppendStagesAsync(pipelineId, [BuildToolStage(call), BuildThinkStage()]);
 
         return StageResult.Success($"Think step {GetStep(context)}: calling tool '{call.Tool}'.");
@@ -202,6 +270,11 @@ public class AgentThinkHandler(
     {
         StageName = "agent:think",
         StageHandlerName = AgentConstants.ThinkHandlerName,
+        Options = new StageOptions
+        {
+            RetryInterval = RateLimitRetryIntervalSeconds,
+            MaxRetries = RateLimitMaxRetries,
+        },
     };
 
     private static StageInfo BuildConfirmationStage(List<AgentToolCall> mutations) => new()
@@ -280,6 +353,68 @@ public class AgentThinkHandler(
         return true;
     }
 
+    private static void ExtractAndSetApprovedMutations(List<AgentConversationTurn> history, IStageContext? context)
+    {
+        var confirmTurn = history.LastOrDefault(t => t.Type == "confirmation_requested");
+        if (confirmTurn?.Content == null) return;
+
+        try
+        {
+            var start = confirmTurn.Content.IndexOf('{');
+            var end = confirmTurn.Content.LastIndexOf('}');
+            if (start < 0 || end < 0) return;
+
+            using var doc = JsonDocument.Parse(confirmTurn.Content[start..(end + 1)]);
+            var root = doc.RootElement;
+            var mutations = new List<AgentToolCall>();
+
+            // need_confirmation format: { action: "need_confirmation", mutations: [...] }
+            if (root.TryGetProperty("mutations", out var mutEl) && mutEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in mutEl.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("tool", out var toolEl)) continue;
+                    var name = toolEl.GetString();
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    var call = new AgentToolCall
+                    {
+                        Tool = name!,
+                        ResultKey = item.TryGetProperty("resultKey", out var rkEl) ? rkEl.GetString() : null,
+                    };
+                    if (item.TryGetProperty("params", out var paramsEl) && paramsEl.ValueKind == JsonValueKind.Object)
+                        foreach (var p in paramsEl.EnumerateObject())
+                            call.Params[p.Name] = p.Value.ValueKind == JsonValueKind.String
+                                ? p.Value.GetString()
+                                : p.Value.GetRawText();
+                    mutations.Add(call);
+                }
+            }
+            // call_tool format: { action: "call_tool", tool: "...", params: {...} }
+            else if (root.TryGetProperty("tool", out var toolEl2))
+            {
+                var name = toolEl2.GetString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    var call = new AgentToolCall
+                    {
+                        Tool = name!,
+                        ResultKey = root.TryGetProperty("resultKey", out var rkEl) ? rkEl.GetString() : null,
+                    };
+                    if (root.TryGetProperty("params", out var paramsEl) && paramsEl.ValueKind == JsonValueKind.Object)
+                        foreach (var p in paramsEl.EnumerateObject())
+                            call.Params[p.Name] = p.Value.ValueKind == JsonValueKind.String
+                                ? p.Value.GetString()
+                                : p.Value.GetRawText();
+                    mutations.Add(call);
+                }
+            }
+
+            if (mutations.Count > 0)
+                SetContextValue(context, AgentConstants.ApprovedMutations, mutations);
+        }
+        catch { /* ignore parse errors */ }
+    }
+
     private static List<AgentConversationTurn> GetOrCreateHistory(IStageContext? context)
     {
         var existing = context.TryGetValue<List<AgentConversationTurn>>(AgentConstants.ConversationHistory);
@@ -295,4 +430,226 @@ public class AgentThinkHandler(
 
     private static int GetStep(IStageContext? context) =>
         context.TryGetValue<int>(AgentConstants.ThinkStepCount);
+
+    private static bool IsAnthropicRateLimit(HttpRequestException ex)
+        => ex.StatusCode == HttpStatusCode.TooManyRequests;
+
+    // ── Loop detection ───────────────────────────────────────────────────────
+
+    /// <summary>Maximum consecutive failures for a single tool before the agent stops.</summary>
+    private const int MaxConsecutiveToolFailures = 3;
+
+    private static string? DetectToolLoop(IStageContext? context)
+    {
+        if (context?.Payload == null) return null;
+
+        foreach (var (key, value) in context.Payload)
+        {
+            if (!key.StartsWith(AgentConstants.ToolFailureCountPrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var count = 0;
+            if (value is int i) count = i;
+            else if (value is long l) count = (int)l;
+            else if (value is System.Text.Json.JsonElement el && el.TryGetInt32(out var j)) count = j;
+
+            if (count >= MaxConsecutiveToolFailures)
+                return key[AgentConstants.ToolFailureCountPrefix.Length..];
+        }
+
+        return null;
+    }
+
+    // ── Token budget ─────────────────────────────────────────────────────────
+
+    private bool IsTokenBudgetExceeded(IStageContext? context)
+    {
+        var budget = agentOptions.TokenBudget;
+
+        if (budget.MaxInputTokensPerSession.HasValue)
+        {
+            var totalInput = context.TryGetValue<int>(AgentConstants.SessionTotalInputTokens);
+            if (totalInput >= budget.MaxInputTokensPerSession.Value)
+                return true;
+        }
+
+        if (budget.MaxCostUsdPerSession.HasValue)
+        {
+            var totalCost = context.TryGetValue<decimal>(AgentConstants.SessionEstimatedCostUsd);
+            if (totalCost >= budget.MaxCostUsdPerSession.Value)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void AccumulateTokenUsage(IStageContext? context, AgentLlmUsage? usage)
+    {
+        if (context == null || usage == null) return;
+
+        context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string key, long value)
+        {
+            var current = context.TryGetValue<long>(key);
+            context.Payload[key] = current + value;
+        }
+
+        void AddDecimal(string key, decimal value)
+        {
+            var current = context.TryGetValue<decimal>(key);
+            context.Payload[key] = current + value;
+        }
+
+        Add(AgentConstants.SessionTotalInputTokens, usage.InputTokens);
+        Add(AgentConstants.SessionTotalOutputTokens, usage.OutputTokens);
+        Add(AgentConstants.SessionCacheReadTokens, usage.CacheReadTokens);
+        Add(AgentConstants.SessionCacheCreationTokens, usage.CacheCreationTokens);
+        AddDecimal(AgentConstants.SessionEstimatedCostUsd, usage.EstimatedCostUsd);
+    }
+
+    // ── Session history (cross-pipeline continuity) ──────────────────────────
+
+    /// <summary>Maximum previous turns to carry into the new pipeline to stay within token budget.</summary>
+    private const int MaxSessionTurns = 24;
+
+    private async Task<List<AgentConversationTurn>?> LoadSessionHistoryAsync(
+        string originalMessage,
+        IStageContext? context)
+    {
+        if (sessionStore == null) return null;
+
+        var sessionId = context.TryGetValue<string>(AgentConstants.SessionId);
+        if (string.IsNullOrEmpty(sessionId)) return null;
+
+        var previous = await sessionStore.LoadAsync(sessionId);
+        if (previous == null || previous.Count == 0) return null;
+
+        // Cap to avoid token explosion on very long sessions
+        var recent = previous.Count > MaxSessionTurns
+            ? previous.GetRange(previous.Count - MaxSessionTurns, MaxSessionTurns)
+            : new List<AgentConversationTurn>(previous);
+
+        // Append the current user message so the LLM sees it as a reply
+        recent.Add(new AgentConversationTurn
+        {
+            Type = "user_message",
+            Content = originalMessage,
+        });
+
+        return recent;
+    }
+
+    // ── Memory recall + context injection ────────────────────────────────────
+
+    private async Task<string?> BuildSystemPromptWithMemoryAsync(string userMessage, IStageContext? context)
+    {
+        var sb = new System.Text.StringBuilder(agentOptions.SystemPrompt ?? string.Empty);
+
+        // Inject pipeline context values the LLM should know about
+        if (agentOptions.ContextInjectionKeys.Count > 0 && context?.Payload != null)
+        {
+            var injected = new List<string>();
+            foreach (var (contextKey, label) in agentOptions.ContextInjectionKeys)
+            {
+                var value = context.TryGetValue<string>(contextKey);
+                if (!string.IsNullOrEmpty(value))
+                    injected.Add($"{label} = {value}");
+            }
+
+            if (injected.Count > 0)
+            {
+                if (sb.Length > 0) sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine("Available context (use these values directly, do not ask the user for them):");
+                foreach (var line in injected)
+                    sb.AppendLine($"- {line}");
+            }
+        }
+
+        // Recall long-term memories
+        if (memoryStore != null)
+        {
+            var sessionId = context.TryGetValue<string>(AgentConstants.SessionId);
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                var memories = await memoryStore.RecallAsync(sessionId, userMessage);
+                if (memories.Count > 0)
+                {
+                    if (sb.Length > 0) sb.AppendLine();
+                    sb.AppendLine();
+                    sb.AppendLine("Relevant memories from previous interactions:");
+                    foreach (var m in memories)
+                        sb.AppendLine($"- [{m.Category}] {m.Content}");
+                }
+            }
+        }
+
+        var result = sb.ToString().TrimEnd();
+        return result.Length > 0 ? result : null;
+    }
+
+    // ── Progress notifications ────────────────────────────────────────────────
+
+    private async Task SendThinkingProgressAsync(IStageContext? context, int stepCount)
+    {
+        var opts = agentOptions.Progress;
+        if (!opts.Enabled || notificationRouter == null) return;
+
+        string message;
+        if (opts.ThinkingMessages is { Length: > 0 })
+        {
+            message = opts.ThinkingMessages[(stepCount - 1) % opts.ThinkingMessages.Length];
+        }
+        else
+        {
+            message = opts.ShowStepNumber
+                ? $"{opts.ThinkingMessage} (step {stepCount})"
+                : opts.ThinkingMessage;
+        }
+
+        await SendProgressAsync(context, message);
+    }
+
+    private async Task SendToolCallProgressAsync(IStageContext? context, string toolName)
+    {
+        var opts = agentOptions.Progress;
+        if (!opts.Enabled || notificationRouter == null) return;
+
+        // Tool-level ProgressMessage takes priority
+        var toolDef = toolRegistry.Find(toolName);
+        if (!string.IsNullOrEmpty(toolDef?.ProgressMessage))
+        {
+            await SendProgressAsync(context, toolDef.ProgressMessage);
+            return;
+        }
+
+        if (opts.ToolCallMessages != null && opts.ToolCallMessages.TryGetValue(toolName, out var perToolMessage))
+        {
+            await SendProgressAsync(context, perToolMessage);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(opts.ToolCallMessage)) return;
+
+        var message = opts.ShowToolName
+            ? $"{opts.ToolCallMessage}: {toolName}…"
+            : opts.ToolCallMessage;
+
+        await SendProgressAsync(context, message);
+    }
+
+    private async Task SendProgressAsync(IStageContext? context, string message, CancellationToken cancellationToken = default)
+    {
+        if (notificationRouter == null) return;
+
+        var notification = new AgentNotification
+        {
+            Type = "progress",
+            Message = message,
+            PipelineId = context?.PipelineId,
+        };
+
+        await notificationRouter.NotifyAsync(context, notification, cancellationToken);
+    }
 }

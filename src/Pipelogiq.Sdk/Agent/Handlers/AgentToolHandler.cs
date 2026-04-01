@@ -28,27 +28,71 @@ public class AgentToolHandler(
     /// <inheritdoc />
     public async Task<IStageResult> ExecuteAsync(AgentToolCallInput input, IStageContext? context = null)
     {
-        var toolDef = toolRegistry.Find(input.ToolName)
-            ?? throw new InvalidOperationException($"Tool '{input.ToolName}' is not registered.");
-
-        // Resolve {{ref:...}} references in params
-        var resolvedParams = ResolveParams(input.Params, context);
-        var validatedParams = ValidateAndCoerceParams(toolDef, resolvedParams);
-
-        // Execute the HTTP call
-        var result = await ExecuteToolCallAsync(toolDef, validatedParams, input.ResultKey, context, default);
-
-        // Store result in context
         context ??= new StageContext();
         context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        AgentToolResult result;
+
+        try
+        {
+            var toolDef = toolRegistry.Find(input.ToolName)
+                ?? throw new InvalidOperationException($"Tool '{input.ToolName}' is not registered.");
+
+            // Resolve {{ref:...}} references in params
+            var resolvedParams = ResolveParams(input.Params, context);
+
+            // Dispatch: native handler takes priority over HTTP
+            var nativeHandler = toolRegistry.FindNativeHandler(input.ToolName);
+            if (nativeHandler != null)
+            {
+                result = await ExecuteNativeToolAsync(nativeHandler, input, resolvedParams, context, default);
+            }
+            else
+            {
+                var validatedParams = ValidateAndCoerceParams(toolDef, resolvedParams);
+                result = await ExecuteToolCallAsync(toolDef, validatedParams, input.ResultKey, context, default);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unexpected exception (e.g. parameter coercion, missing registration).
+            // Record as a tool error in history so the LLM can recover gracefully
+            // instead of crashing the pipeline and leaving the user without a response.
+            result = new AgentToolResult
+            {
+                ToolName = input.ToolName,
+                ResultKey = input.ResultKey,
+                ResponseBody = $"Tool execution error: {ex.Message}",
+                StatusCode = 500,
+                IsSuccess = false,
+            };
+        }
+
+        // Store result in context
         context.Payload[$"agent:result:{input.ResultKey}"] = result.ResponseBody ?? string.Empty;
+
+        // Track consecutive failures per tool for loop detection.
+        // The think handler checks this counter before calling the LLM.
+        var failureKey = AgentConstants.ToolFailureCountPrefix + input.ToolName;
+        if (result.IsSuccess)
+        {
+            context.Payload.Remove(failureKey);
+        }
+        else
+        {
+            var prev = context.TryGetValue<int>(failureKey);
+            context.Payload[failureKey] = prev + 1;
+        }
 
         // Append to overall tool results list
         var toolResults = GetOrCreateToolResults(context);
         toolResults.Add(result);
         context.Payload[AgentConstants.ToolResults] = toolResults;
 
-        // Record tool result in ReAct conversation history (no-op in plan-and-execute mode)
+        // Record tool result in ReAct conversation history (no-op in plan-and-execute mode).
+        // Tool failures are intentionally recorded here and returned as Success so the
+        // next think step runs and the LLM can decide how to respond — the pipeline must
+        // never stop silently and leave the user without a Telegram reply.
         var history = GetOrCreateHistory(context);
         history.Add(new AgentConversationTurn
         {
@@ -58,10 +102,32 @@ public class AgentToolHandler(
         });
         context.Payload[AgentConstants.ConversationHistory] = history;
 
-        if (!result.IsSuccess)
-            return StageResult.Error($"Tool '{input.ToolName}' failed with HTTP {result.StatusCode}: {result.ResponseBody}");
+        var detail = result.IsSuccess
+            ? (result.StatusCode > 0 ? $"Tool '{input.ToolName}' executed. HTTP {result.StatusCode}." : $"Native tool '{input.ToolName}' executed.")
+            : $"Tool '{input.ToolName}' returned an error (recorded in history for LLM recovery): {result.ResponseBody}";
 
-        return StageResult.Success($"Tool '{input.ToolName}' executed. HTTP {result.StatusCode}.");
+        // Always return Success so the pipeline continues to the next think step.
+        // A tool failure is a domain event the LLM handles, not a pipeline crash.
+        return StageResult.Success(detail);
+    }
+
+    private static async Task<AgentToolResult> ExecuteNativeToolAsync(
+        IAgentToolHandler handler,
+        AgentToolCallInput input,
+        Dictionary<string, object?> resolvedParams,
+        IStageContext? context,
+        CancellationToken ct)
+    {
+        var output = await handler.ExecuteAsync(resolvedParams, context, ct);
+        return new AgentToolResult
+        {
+            ToolName = input.ToolName,
+            ResultKey = input.ResultKey,
+            ResponseBody = output.IsSuccess ? output.Output : output.ErrorMessage,
+            StatusCode = output.IsSuccess ? 200 : 500,
+            IsSuccess = output.IsSuccess,
+            IsMutating = false,
+        };
     }
 
     private async Task<AgentToolResult> ExecuteToolCallAsync(

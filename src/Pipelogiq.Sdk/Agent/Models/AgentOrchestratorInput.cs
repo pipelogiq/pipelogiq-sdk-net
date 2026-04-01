@@ -16,4 +16,7 @@ public class AgentOrchestratorInput
 
     /// <summary>User identifier for context and authorization.</summary>
     public string? UserId { get; set; }
+
+    /// <summary>Optional binary attachments (images, PDFs, audio) sent alongside the message.</summary>
+    public List<AgentAttachment>? Attachments { get; set; }
 }

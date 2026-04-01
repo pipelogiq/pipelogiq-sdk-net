@@ -93,6 +93,8 @@ public static class TelegramAgentChannelServiceCollectionExtensions
             TelegramBotToken = options.TelegramBotToken,
             TelegramPollTimeoutSeconds = options.TelegramPollTimeoutSeconds,
             TelegramAllowedChatIds = options.TelegramAllowedChatIds.ToArray(),
+            VoiceTranscriber = options.VoiceTranscriber,
+            MaxFileSizeBytes = options.MaxFileSizeBytes,
         };
     }
 }

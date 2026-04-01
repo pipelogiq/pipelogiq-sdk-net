@@ -14,10 +14,22 @@ internal static class AgentConstants
     public const string ApprovedMutations = "agent:approvedMutations";
     public const string FinalResponse = "agent:finalResponse";
     public const string PendingNotification = "agent:pendingNotification";
+    public const string Attachments = "agent:attachments";
 
     // ReAct loop context keys
     public const string ConversationHistory = "agent:conversationHistory";
     public const string ThinkStepCount = "agent:thinkStepCount";
+
+    // Loop detection: tracks consecutive failures per tool name.
+    // Key format: "agent:toolFailures:{toolName}"
+    public const string ToolFailureCountPrefix = "agent:toolFailures:";
+
+    // Token budget / cost tracking context keys
+    public const string SessionTotalInputTokens = "agent:session:inputTokens";
+    public const string SessionTotalOutputTokens = "agent:session:outputTokens";
+    public const string SessionCacheReadTokens = "agent:session:cacheReadTokens";
+    public const string SessionCacheCreationTokens = "agent:session:cacheCreationTokens";
+    public const string SessionEstimatedCostUsd = "agent:session:estimatedCostUsd";
 
     // Handler names (used for registration and routing)
     public const string OrchestratorHandlerName = "AgentOrchestratorHandler";

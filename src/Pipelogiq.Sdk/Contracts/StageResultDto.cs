@@ -20,6 +20,9 @@ public class StageResultDto : IStageResult
     public bool IsSuccess { get; set; }
 
     /// <inheritdoc />
+    public string? ErrorCode { get; set; }
+
+    /// <inheritdoc />
     public int? NextStageId { get; set; }
 
     /// <inheritdoc />
