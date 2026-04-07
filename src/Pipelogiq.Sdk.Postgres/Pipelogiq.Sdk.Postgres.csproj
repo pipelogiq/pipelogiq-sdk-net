@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <PackageId>PipelogiqSDK.Postgres</PackageId>
-    <Version>0.2.0-preview.11</Version>
+    <Version>0.3.0-preview.1</Version>
     <Description>PostgreSQL-backed IAgentSessionStore and IAgentMemoryStore for PipelogiqSDK. Enables durable multi-instance deployments.</Description>
   </PropertyGroup>
 
@@ -13,5 +13,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Pipelogiq.Sdk\PipelogiqSDK.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Link="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>

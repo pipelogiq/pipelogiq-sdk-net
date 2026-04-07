@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.1] - 2026-04-07
+
+### Added
+
+- Smart Expense Agent example with Telegram integration and Groq Whisper voice transcription, configured via environment variables.
+- `PipelogiqSDK.Testing` helpers for agent unit tests, including `AgentTestHarness` and `MockLlmPlanner`.
+- Structured stage error codes, retry-aware `StageResult` helpers, Anthropic prompt caching, model routing, token budget tracking, and long-term memory support for agent workflows.
+
+### Fixed
+
+- Worker connection and queue provisioning resilience improvements for retry-first startup and heartbeat reporting.
+
 ### Added
 
 - **`ErrorCode` on stage results** — `IStageResult` and `StageResultDto` now expose an optional `ErrorCode` property. Report a structured error code alongside the failure message so that server-side retry policies can decide whether to retry based on the specific failure kind.
@@ -55,5 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.1...HEAD
+[0.3.0-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.1
 [0.1.0]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.1.0
