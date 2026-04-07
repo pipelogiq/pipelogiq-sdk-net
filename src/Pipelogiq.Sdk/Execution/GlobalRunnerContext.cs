@@ -3,9 +3,10 @@ using PipelogiqSDK.Configuration;
 namespace PipelogiqSDK.Execution;
 
 /// <summary>
-/// Global mutable context shared between runner and builders.
+/// Internal startup-time configuration carrier. Set once during AddPipelogiq() and never mutated again.
+/// Not part of the public API — use DI-registered PipelogiqRunnerOptions instead.
 /// </summary>
-public static class GlobalRunnerContext
+internal static class GlobalRunnerContext
 {
     /// <summary>
     /// Gets or sets globally configured runner options.

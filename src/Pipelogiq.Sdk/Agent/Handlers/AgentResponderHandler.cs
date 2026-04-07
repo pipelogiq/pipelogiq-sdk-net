@@ -11,7 +11,8 @@ namespace PipelogiqSDK.Agent.Handlers;
 public class AgentResponderHandler(
     ILlmPlanner llmPlanner,
     IAgentNotificationRouter? notificationRouter = null,
-    IAgentSessionStore? sessionStore = null) : IStageHandler
+    IAgentSessionStore? sessionStore = null,
+    IAgentLifecycleObserver? lifecycleObserver = null) : IStageHandler
 {
     /// <inheritdoc />
     public async Task<IStageResult> ExecuteAsync(IStageContext? context = null)
@@ -42,6 +43,28 @@ public class AgentResponderHandler(
         // The next user message from the same session will load this history
         // and the agent will understand the context without starting over.
         await SaveSessionHistoryAsync(context, originalMessage, responseText);
+
+        // Emit session-completed lifecycle event
+        if (lifecycleObserver != null)
+        {
+            try
+            {
+                var toolResults = context.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults);
+                var costUsd = (decimal?)context.TryGetValue<decimal>(AgentConstants.SessionEstimatedCostUsd);
+                await lifecycleObserver.OnSessionCompletedAsync(new AgentSessionLifecycleEvent
+                {
+                    SessionId = context.TryGetValue<string>(AgentConstants.SessionId),
+                    OriginalMessage = originalMessage,
+                    FinalResponse = responseText.Length > 500 ? responseText[..500] + "…" : responseText,
+                    ToolCallCount = toolResults?.Count ?? 0,
+                    EstimatedCostUsd = costUsd,
+                });
+            }
+            catch
+            {
+                // Observer errors are intentionally swallowed — they must never affect agent flow
+            }
+        }
 
         return result;
     }

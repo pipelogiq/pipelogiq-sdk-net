@@ -19,7 +19,9 @@ namespace PipelogiqSDK.Agent.Handlers;
 public class AgentToolHandler(
     IAgentToolRegistry toolRegistry,
     AgentOptions agentOptions,
-    IHttpClientFactory httpClientFactory) : IStageHandler<AgentToolCallInput>
+    IHttpClientFactory httpClientFactory,
+    IAgentToolPolicy? toolPolicy = null,
+    IAgentLifecycleObserver? lifecycleObserver = null) : IStageHandler<AgentToolCallInput>
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly Regex HeaderTemplateRegex =
@@ -40,6 +42,31 @@ public class AgentToolHandler(
 
             // Resolve {{ref:...}} references in params
             var resolvedParams = ResolveParams(input.Params, context);
+
+            // Check tool policy before executing
+            if (toolPolicy != null)
+            {
+                var policyCtx = new AgentToolExecutionContext
+                {
+                    ToolName = input.ToolName,
+                    IsMutating = toolDef.IsMutating ?? false,
+                    Parameters = resolvedParams,
+                    StageContext = context,
+                };
+                var allowed = await toolPolicy.CanExecuteAsync(policyCtx);
+                if (!allowed)
+                {
+                    result = new AgentToolResult
+                    {
+                        ToolName = input.ToolName,
+                        ResultKey = input.ResultKey,
+                        ResponseBody = $"Permission denied: tool '{input.ToolName}' is not allowed in this context.",
+                        StatusCode = 403,
+                        IsSuccess = false,
+                    };
+                    goto RecordResult;
+                }
+            }
 
             // Dispatch: native handler takes priority over HTTP
             var nativeHandler = toolRegistry.FindNativeHandler(input.ToolName);
@@ -68,6 +95,7 @@ public class AgentToolHandler(
             };
         }
 
+        RecordResult:
         // Store result in context
         context.Payload[$"agent:result:{input.ResultKey}"] = result.ResponseBody ?? string.Empty;
 
@@ -101,6 +129,29 @@ public class AgentToolHandler(
             Content = result.ResponseBody,
         });
         context.Payload[AgentConstants.ConversationHistory] = history;
+
+        // Emit lifecycle event (fire-and-forget; observer errors must not crash the pipeline)
+        if (lifecycleObserver != null)
+        {
+            try
+            {
+                await lifecycleObserver.OnToolExecutedAsync(new AgentToolLifecycleEvent
+                {
+                    ToolName = input.ToolName,
+                    IsSuccess = result.IsSuccess,
+                    IsMutating = result.IsMutating,
+                    SessionId = context.TryGetValue<string>(AgentConstants.SessionId),
+                    ResponseSummary = result.ResponseBody?.Length > 200
+                        ? result.ResponseBody[..200] + "…"
+                        : result.ResponseBody,
+                    HttpStatusCode = result.StatusCode > 0 ? result.StatusCode : null,
+                });
+            }
+            catch
+            {
+                // Observer errors are intentionally swallowed — they must never affect agent flow
+            }
+        }
 
         var detail = result.IsSuccess
             ? (result.StatusCode > 0 ? $"Tool '{input.ToolName}' executed. HTTP {result.StatusCode}." : $"Native tool '{input.ToolName}' executed.")

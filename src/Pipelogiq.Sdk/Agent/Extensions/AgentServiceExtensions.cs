@@ -61,6 +61,14 @@ public static class AgentServiceExtensions
         services.TryAddSingleton<IAgentNotificationRouter, AgentNotificationRouter>();
         services.TryAddSingleton<IAgentMemoryStore, InMemoryAgentMemoryStore>();
         services.TryAddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
+        services.TryAddSingleton<IAgentToolPolicy, AllowAllToolPolicy>();
+
+        // Lifecycle observer: resolved via AgentLifecycleObserverRegistry that collects
+        // all observers added via AddLifecycleObserver(). The registry builds a
+        // CompositeLifecycleObserver (or NoOp if none were registered).
+        services.TryAddSingleton<AgentLifecycleObserverRegistry>();
+        services.TryAddSingleton<IAgentLifecycleObserver>(sp =>
+            sp.GetRequiredService<AgentLifecycleObserverRegistry>().Build(sp));
 
         services.TryAddTransient<AgentOrchestratorHandler>();
         services.TryAddTransient<AgentToolHandler>();
@@ -150,6 +158,52 @@ public class AgentBuilder(AgentOptions options)
 
         options.Tools.Add(definition);
         options.NativeHandlers[definition.Name] = handler;
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a lifecycle observer that receives tool, approval, session, and budget events.
+    /// Multiple observers can be registered — they all receive every event via a composite.
+    /// </summary>
+    /// <typeparam name="TObserver">Observer implementation registered as a singleton.</typeparam>
+    public AgentBuilder AddLifecycleObserver<TObserver>(IServiceCollection services)
+        where TObserver : class, IAgentLifecycleObserver
+    {
+        services.AddSingleton<TObserver>();
+        AgentLifecycleObserverRegistry.AddFactory(services,
+            sp => sp.GetRequiredService<TObserver>());
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a lifecycle observer instance.
+    /// Multiple observers can be registered — they all receive every event via a composite.
+    /// </summary>
+    public AgentBuilder AddLifecycleObserver(IServiceCollection services, IAgentLifecycleObserver observer)
+    {
+        AgentLifecycleObserverRegistry.AddFactory(services, _ => observer);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a custom tool policy that controls which tools can be executed.
+    /// Replaces the default <see cref="AllowAllToolPolicy"/>.
+    /// </summary>
+    /// <typeparam name="TPolicy">Policy implementation type registered as a singleton.</typeparam>
+    /// <param name="services">The same service collection passed to AddPipelogiqAgent().</param>
+    public AgentBuilder UseToolPolicy<TPolicy>(IServiceCollection services)
+        where TPolicy : class, IAgentToolPolicy
+    {
+        services.AddSingleton<IAgentToolPolicy, TPolicy>();
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a custom tool policy instance.
+    /// </summary>
+    public AgentBuilder UseToolPolicy(IServiceCollection services, IAgentToolPolicy policy)
+    {
+        services.AddSingleton(policy);
         return this;
     }
 

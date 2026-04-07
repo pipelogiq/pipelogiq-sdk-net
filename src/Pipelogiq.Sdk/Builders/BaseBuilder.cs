@@ -39,11 +39,13 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
     protected PipelogiqApiClient ApiClient;
 
     /// <summary>
-    /// Initializes builder with optional runner options.
+    /// Initializes builder with explicit runner options.
     /// </summary>
-    /// <param name="options">Runner options; falls back to global context when null.</param>
+    /// <param name="options">Runner options. Pass the same instance registered via AddPipelogiq().</param>
     protected BaseBuilder(PipelogiqRunnerOptions? options = null)
     {
+        // Fall back to the startup-time singleton so that builders constructed with `new PipelineBuilder()`
+        // (outside DI) still work. The global context is internal and set-once — this is safe.
         var runnerOptions = options ?? GlobalRunnerContext.Options ?? new PipelogiqRunnerOptions();
         ApiClient = new PipelogiqApiClient(runnerOptions);
     }

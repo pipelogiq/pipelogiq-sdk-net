@@ -113,6 +113,7 @@ public sealed class AgentResponderHandlerTests
             IReadOnlyList<AgentToolDefinition> tools,
             bool requireConfirmationForMutations,
             string? systemPrompt = null,
+            IReadOnlyList<AgentAttachment>? attachments = null,
             CancellationToken ct = default)
         {
             return Task.FromResult(new AgentThinkDecision

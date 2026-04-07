@@ -17,6 +17,11 @@ public class StageExecutor(IServiceProvider serviceProvider)
     private const string StageActivityName = "pipelogiq.stage.execute";
     private static readonly ActivitySource StageActivitySource = new("PipelogiqSDK");
 
+    // Cache compiled invoke delegates keyed by handler input type.
+    // Avoids repeated MakeGenericType + GetMethod + Invoke on every stage execution.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Func<object, object?, IStageContext, Task<IStageResult>>>
+        InvokeCache = new();
+
     /// <summary>
     /// Executes a stage handler and returns stage result.
     /// </summary>
@@ -194,28 +199,36 @@ public class StageExecutor(IServiceProvider serviceProvider)
         return PayloadConverter.DeserializeJson(serializedInput, inputType);
     }
 
-    private static async Task<IStageResult> InvokeGenericHandlerAsync(
+    private static Task<IStageResult> InvokeGenericHandlerAsync(
         object handler,
         Type inputType,
         object? input,
         IStageContext stageContext)
     {
+        var invoker = InvokeCache.GetOrAdd(inputType, BuildInvoker);
+        return invoker(handler, input ?? Activator.CreateInstance(inputType), stageContext);
+    }
+
+    /// <summary>
+    /// Builds a strongly-typed delegate that calls IStageHandler&lt;TInput&gt;.ExecuteAsync
+    /// without reflection on the hot path. Compiled once per input type and cached.
+    /// </summary>
+    private static Func<object, object?, IStageContext, Task<IStageResult>> BuildInvoker(Type inputType)
+    {
         var handlerInterface = typeof(IStageHandler<>).MakeGenericType(inputType);
-        var executeMethod = handlerInterface.GetMethod(nameof(IStageHandler<object>.ExecuteAsync));
+        var executeMethod = handlerInterface.GetMethod(nameof(IStageHandler<object>.ExecuteAsync))
+            ?? throw new InvalidOperationException($"IStageHandler<{inputType.Name}>.ExecuteAsync not found.");
 
-        if (executeMethod == null)
-            throw new InvalidOperationException("IStageHandler.ExecuteAsync not found.");
+        // Use expression trees to build a compiled delegate that avoids per-call reflection
+        var handlerParam = System.Linq.Expressions.Expression.Parameter(typeof(object), "handler");
+        var inputParam   = System.Linq.Expressions.Expression.Parameter(typeof(object), "input");
+        var contextParam = System.Linq.Expressions.Expression.Parameter(typeof(IStageContext), "context");
 
-        var parameters = new[] { input ?? Activator.CreateInstance(inputType), stageContext };
-        var executeTask = (Task?)executeMethod.Invoke(handler, parameters);
+        var castHandler = System.Linq.Expressions.Expression.Convert(handlerParam, handlerInterface);
+        var castInput   = System.Linq.Expressions.Expression.Convert(inputParam, inputType);
+        var call        = System.Linq.Expressions.Expression.Call(castHandler, executeMethod, castInput, contextParam);
 
-        if (executeTask == null)
-            throw new InvalidOperationException("Handler returned null task.");
-
-        await executeTask.ConfigureAwait(false);
-
-        var resultProperty = executeTask.GetType().GetProperty("Result");
-        return (IStageResult?)resultProperty?.GetValue(executeTask)
-               ?? throw new InvalidOperationException("Handler returned null result.");
+        return System.Linq.Expressions.Expression.Lambda<Func<object, object?, IStageContext, Task<IStageResult>>>(
+            call, handlerParam, inputParam, contextParam).Compile();
     }
 }

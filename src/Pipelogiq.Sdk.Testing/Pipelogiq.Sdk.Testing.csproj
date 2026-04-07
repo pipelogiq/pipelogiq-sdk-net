@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <PackageId>PipelogiqSDK.Testing</PackageId>
+    <Version>0.2.0-preview.11</Version>
+    <Description>Test utilities for PipelogiqSDK agents. Provides AgentTestHarness and MockLlmPlanner for unit-testing agent flows without a real LLM or Pipelogiq server.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pipelogiq.Sdk\PipelogiqSDK.csproj" />
+  </ItemGroup>
+</Project>
