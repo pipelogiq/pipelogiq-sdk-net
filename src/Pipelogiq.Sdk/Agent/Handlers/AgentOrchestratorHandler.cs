@@ -37,6 +37,8 @@ public class AgentOrchestratorHandler(
         SetContextValue(context, AgentConstants.ToolResults, new List<AgentToolResult>());
         if (input.Attachments?.Count > 0)
             SetContextValue(context, AgentConstants.Attachments, input.Attachments);
+        context.LogInfo(
+            $"Agent orchestrator started [reactMode={agentOptions.UseReActMode}, requireConfirmation={agentOptions.RequireConfirmationForMutations}, message={input.Message.ToLogPreview(800)}]");
 
         // ReAct mode: hand off to AgentThinkHandler loop — no upfront planning
         if (agentOptions.UseReActMode)
@@ -57,6 +59,7 @@ public class AgentOrchestratorHandler(
                 ]
             };
             await apiClient.AppendAgentStagesAsync(pipelineId, thinkRequest);
+            context.LogInfo("ReAct mode enabled. Initial think stage appended.");
 
             return StageResult.Success("ReAct mode: think stage appended. Loop begins.");
         }
@@ -70,6 +73,7 @@ public class AgentOrchestratorHandler(
         }
         catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))
         {
+            context.LogWarning($"Planner hit rate limit [{ex.Message.ToLogPreview(300)}]");
             return StageResult.RateLimitExceeded(
                 $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
         }
@@ -78,6 +82,7 @@ public class AgentOrchestratorHandler(
         {
             if (!string.IsNullOrWhiteSpace(plan.DirectAnswer))
                 SetContextValue(context, "agent:directAnswer", plan.DirectAnswer);
+            context.LogInfo("Planner returned direct answer. Appending responder only.");
 
             await AppendStagesAsync(pipelineId, new List<AgentToolCall>(), context, ct: default);
             return StageResult.Success("No tools needed; responder appended.");
@@ -85,6 +90,8 @@ public class AgentOrchestratorHandler(
 
         var readOnlyCalls = plan.ToolCalls.Where(c => !IsToolMutating(c.Tool)).ToList();
         var mutatingCalls = plan.ToolCalls.Where(c => IsToolMutating(c.Tool)).ToList();
+        context.LogInfo(
+            $"Planner produced tool plan [total={plan.ToolCalls.Count}, readOnly={readOnlyCalls.Count}, mutating={mutatingCalls.Count}]");
 
         await AppendStagesAsync(pipelineId, readOnlyCalls, mutatingCalls, context, ct: default);
 
@@ -176,6 +183,10 @@ public class AgentOrchestratorHandler(
         {
             StageName = "agent:responder",
             StageHandlerName = AgentConstants.ResponderHandlerName,
+            Options = new StageOptions
+            {
+                RunNextIfFailed = true,
+            },
         };
     }
 

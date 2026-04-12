@@ -24,6 +24,7 @@ public class AgentConfirmationHandler(IAgentNotificationRouter? notificationRout
         {
             if (approved.Value)
             {
+                context.LogInfo($"Confirmation approved [mutations={input.PendingMutations.Count}]");
                 if (context != null)
                 {
                     context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
@@ -37,6 +38,7 @@ public class AgentConfirmationHandler(IAgentNotificationRouter? notificationRout
             var reason = context.TryGetValue<string>(AgentConstants.RejectionReason) ?? "User rejected the changes.";
             context!.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             context.Payload["agent:directAnswer"] = reason;
+            context.LogWarning($"Confirmation rejected [mutations={input.PendingMutations.Count}, reason={reason}]");
 
             // Plan-and-execute mode: jump directly to responder stage (already exists)
             var responderStageId = context.TryGetValue<int?>(AgentConstants.ResponderStageId);
@@ -59,6 +61,7 @@ public class AgentConfirmationHandler(IAgentNotificationRouter? notificationRout
         var stageId = context?.StageId;
 
         var description = BuildMutationDescription(input.PendingMutations);
+        context.LogInfo($"Requesting confirmation [mutations={input.PendingMutations.Count}, details={description}]");
         var notification = new AgentNotification
         {
             Type = "confirmation_required",
@@ -71,6 +74,7 @@ public class AgentConfirmationHandler(IAgentNotificationRouter? notificationRout
         if (notificationRouter == null)
         {
             StorePendingNotification(context, notification);
+            context.LogWarning("Confirmation notification router unavailable. Stored pending notification in context.");
             return StageResult.Error("Unable to deliver confirmation request because the notification router is unavailable.");
         }
 
@@ -78,10 +82,12 @@ public class AgentConfirmationHandler(IAgentNotificationRouter? notificationRout
         if (!dispatch.Delivered)
         {
             StorePendingNotification(context, notification);
+            context.LogWarning($"Confirmation delivery failed [{dispatch.FailureReason}]");
             return StageResult.Error($"Unable to deliver confirmation request. {dispatch.FailureReason}");
         }
 
         // Return waiting state — pipeline pauses here
+        context.LogInfo($"Confirmation delivered via channel '{dispatch.Channel}'. Waiting for approval.");
         return new StageResultDto
         {
             Result = "Waiting for user confirmation.",

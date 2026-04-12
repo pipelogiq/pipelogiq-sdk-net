@@ -131,6 +131,76 @@ public sealed class AgentThinkHandlerTests
         Assert.False(context.Payload!.ContainsKey("agent:approvedMutations"));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenToolLoopDetected_AppendsSingleResponderAndReturnsSuccessfulTerminalResult()
+    {
+        var handler = new CapturingThinkHandler(
+            new StaticPlanner(new AgentThinkDecision { Action = AgentThinkAction.Done, FinalAnswer = "unused" }),
+            new StaticToolRegistry([]),
+            new AgentOptions
+            {
+                RequireConfirmationForMutations = true,
+                MaxThinkSteps = 10,
+            },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 103,
+            StageId = 203,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Generate budget",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+                ["agent:toolFailures:saveBudgetResult"] = 3,
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("TOOL_LOOP", result.ErrorCode);
+        Assert.Single(handler.LastAppendedStages);
+        Assert.Equal("agent:responder", handler.LastAppendedStages[0].StageName);
+        Assert.True(handler.LastAppendedStages[0].Options?.RunNextIfFailed);
+        Assert.True(context.Payload!.ContainsKey("agent:responderAppended"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenResponderAlreadyAppended_DoesNotAppendAnotherResponder()
+    {
+        var handler = new CapturingThinkHandler(
+            new StaticPlanner(new AgentThinkDecision { Action = AgentThinkAction.Done, FinalAnswer = "unused" }),
+            new StaticToolRegistry([]),
+            new AgentOptions
+            {
+                RequireConfirmationForMutations = true,
+                MaxThinkSteps = 10,
+            },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 104,
+            StageId = 204,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Generate budget",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+                ["agent:toolFailures:saveBudgetResult"] = 3,
+                ["agent:responderAppended"] = true,
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("TOOL_LOOP", result.ErrorCode);
+        Assert.Empty(handler.LastAppendedStages);
+    }
+
     private sealed class CapturingThinkHandler(
         ILlmPlanner llmPlanner,
         IAgentToolRegistry toolRegistry,

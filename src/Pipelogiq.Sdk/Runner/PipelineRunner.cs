@@ -536,6 +536,8 @@ public class PipelineRunner
         {
             var executionData = BuildExecutionData(stage);
             executionData.Logger = logger;
+            logger.Info(
+                $"Stage execution starting [stageId={stage.StageId}, handler={stage.StageHandlerName}, pipelineId={stage.PipelineId}, inputPreview={stage.Input.ToLogPreview(800)}]");
             await SetStatusToRunning(stage.StageId, stoppingToken);
 
             var stageResult = await _stageExecutor.ExecuteStageHandlerAsync(executionData);
@@ -547,11 +549,15 @@ public class PipelineRunner
             resultDto.NextStageId = stageResult.NextStageId;
             resultDto.RunNextIfCurrentFailed = stageResult.RunNextIfCurrentFailed;
             resultDto.IsWaitingForApproval = stageResult.IsWaitingForApproval;
+            logger.Info(
+                $"Stage execution finished [stageId={stage.StageId}, success={stageResult.IsSuccess}, waitingForApproval={stageResult.IsWaitingForApproval}, errorCode={stageResult.ErrorCode ?? "-"}, nextStageId={(stageResult.NextStageId?.ToString() ?? "-")}, contextItems={stageResult.ContextItems?.Count ?? 0}, resultPreview={stageResult.Result.ToLogPreview(800)}]");
         }
         catch (Exception ex)
         {
             resultDto.Result = $"{ex.Message}\n{ex.StackTrace}";
             resultDto.IsSuccess = false;
+            logger.Error(
+                $"Stage execution crashed [stageId={stage.StageId}, handler={stage.StageHandlerName}, error={ex.Message.ToLogPreview(800)}]");
         }
         finally
         {

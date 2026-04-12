@@ -25,6 +25,7 @@ public class AgentResponderHandler(
         if (!string.IsNullOrWhiteSpace(directAnswer))
         {
             responseText = directAnswer;
+            context.LogInfo($"Responder using direct answer [{responseText.ToLogPreview(800)}]");
         }
         else
         {
@@ -32,6 +33,7 @@ public class AgentResponderHandler(
             var toolResults = context.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults)
                               ?? new List<AgentToolResult>();
 
+            context.LogInfo($"Responder synthesizing final message from {toolResults.Count} tool result(s).");
             responseText = toolResults.Count > 0
                 ? await llmPlanner.SynthesizeAsync(originalMessage, toolResults)
                 : "The request has been processed.";
@@ -101,6 +103,7 @@ public class AgentResponderHandler(
         if (notificationRouter == null)
         {
             StoreFallbackResponse(context, message);
+            context.LogWarning("Notification router unavailable. Final response stored in context.");
             return StageResult.Success(
                 $"Notification router unavailable. Final response stored in context key '{AgentConstants.FinalResponse}'.");
         }
@@ -113,9 +116,13 @@ public class AgentResponderHandler(
         });
 
         if (dispatch.Delivered)
+        {
+            context.LogInfo($"Final response delivered via channel '{dispatch.Channel}'.");
             return StageResult.Success($"Response sent via channel '{dispatch.Channel}'.");
+        }
 
         StoreFallbackResponse(context, message);
+        context.LogWarning($"Notification delivery failed [{dispatch.FailureReason}]. Final response stored in context.");
         return StageResult.Success(
             $"Notification delivery failed ({dispatch.FailureReason}). Final response stored in context key '{AgentConstants.FinalResponse}'.");
     }

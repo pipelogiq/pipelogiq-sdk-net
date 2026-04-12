@@ -42,6 +42,8 @@ public class AgentToolHandler(
 
             // Resolve {{ref:...}} references in params
             var resolvedParams = ResolveParams(input.Params, context);
+            context.LogInfo(
+                $"Tool execution starting [tool={input.ToolName}, resultKey={input.ResultKey}, mutating={toolDef.IsEffectivelyMutating}, params={resolvedParams.ToLogPreview(800)}]");
 
             // Check tool policy before executing
             if (toolPolicy != null)
@@ -56,6 +58,7 @@ public class AgentToolHandler(
                 var allowed = await toolPolicy.CanExecuteAsync(policyCtx);
                 if (!allowed)
                 {
+                    context.LogWarning($"Tool policy denied execution [tool={input.ToolName}]");
                     result = new AgentToolResult
                     {
                         ToolName = input.ToolName,
@@ -72,11 +75,13 @@ public class AgentToolHandler(
             var nativeHandler = toolRegistry.FindNativeHandler(input.ToolName);
             if (nativeHandler != null)
             {
+                context.LogInfo($"Dispatching native tool handler [tool={input.ToolName}]");
                 result = await ExecuteNativeToolAsync(nativeHandler, input, resolvedParams, context, default);
             }
             else
             {
                 var validatedParams = ValidateAndCoerceParams(toolDef, resolvedParams);
+                context.LogInfo($"Dispatching HTTP tool call [tool={input.ToolName}, method={toolDef.HttpMethod}, target={toolDef.TargetApiName ?? toolDef.BaseUrl ?? toolDef.UrlTemplate}]");
                 result = await ExecuteToolCallAsync(toolDef, validatedParams, input.ResultKey, context, default);
             }
         }
@@ -93,6 +98,7 @@ public class AgentToolHandler(
                 StatusCode = 500,
                 IsSuccess = false,
             };
+            context.LogError($"Tool execution crashed [tool={input.ToolName}, error={ex.Message.ToLogPreview(800)}]");
         }
 
         RecordResult:
@@ -105,11 +111,15 @@ public class AgentToolHandler(
         if (result.IsSuccess)
         {
             context.Payload.Remove(failureKey);
+            context.LogInfo(
+                $"Tool execution completed [tool={input.ToolName}, success=true, statusCode={result.StatusCode}, response={result.ResponseBody.ToLogPreview(800)}]");
         }
         else
         {
             var prev = context.TryGetValue<int>(failureKey);
             context.Payload[failureKey] = prev + 1;
+            context.LogWarning(
+                $"Tool execution completed [tool={input.ToolName}, success=false, statusCode={result.StatusCode}, consecutiveFailures={prev + 1}, response={result.ResponseBody.ToLogPreview(800)}]");
         }
 
         // Append to overall tool results list

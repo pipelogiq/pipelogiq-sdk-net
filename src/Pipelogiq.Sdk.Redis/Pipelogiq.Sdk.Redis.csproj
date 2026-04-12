@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <PackageId>PipelogiqSDK.Redis</PackageId>
-    <Version>0.3.0-preview.1</Version>
+    <Version>0.3.0-preview.2</Version>
     <Description>Redis-backed IAgentSessionStore and IAgentMemoryStore for PipelogiqSDK. Enables multi-instance deployments.</Description>
   </PropertyGroup>
 

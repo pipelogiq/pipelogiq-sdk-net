@@ -1,9 +1,9 @@
 # Pipelogiq .NET SDK
 
-![Status: Preview v0.1.0](https://img.shields.io/badge/status-Preview%20v0.x-orange)
+![Status: Preview v0.3.0-preview.2](https://img.shields.io/badge/status-Preview%20v0.3.0--preview.2-orange)
 
 Pipelogiq .NET SDK provides the .NET worker runtime and API client helpers for Pipelogiq pipelines.
-This repository is a **v0.1.0 preview** focused on core execution, transport, and integration primitives.
+This repository is currently shipping **v0.3.0-preview.2** packages focused on execution, transport, integration primitives, and AI agent workflows.
 APIs may change while the SDK is still stabilizing.
 
 ## Installation

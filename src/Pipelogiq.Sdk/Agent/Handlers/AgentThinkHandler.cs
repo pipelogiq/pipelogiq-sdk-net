@@ -40,12 +40,14 @@ public class AgentThinkHandler(
         var stepCount = context.TryGetValue<int>(AgentConstants.ThinkStepCount);
         stepCount++;
         SetContextValue(context, AgentConstants.ThinkStepCount, stepCount);
+        context.LogInfo($"Think step started [step={stepCount}, pipelineId={pipelineId}]");
 
         if (stepCount > agentOptions.MaxThinkSteps)
         {
             SetContextValue(context, "agent:directAnswer",
                 $"Agent reached the maximum number of reasoning steps ({agentOptions.MaxThinkSteps}).");
-            await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+            context.LogWarning($"Think limit reached [step={stepCount}, max={agentOptions.MaxThinkSteps}]");
+            await EnsureResponderStageAppendedAsync(pipelineId, context);
             return StageResult.Success($"Max think steps ({agentOptions.MaxThinkSteps}) reached — responder appended.");
         }
 
@@ -80,7 +82,8 @@ public class AgentThinkHandler(
                 SetContextValue(context, "agent:directAnswer",
                     context.TryGetValue<string>(AgentConstants.RejectionReason) ?? "The action was cancelled by the user.");
                 SetContextValue(context, AgentConstants.ConversationHistory, history);
-                await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+                context.LogWarning("Approval rejected. Switching directly to responder.");
+                await EnsureResponderStageAppendedAsync(pipelineId, context);
                 return StageResult.Success("Confirmation rejected — responder appended.");
             }
 
@@ -102,8 +105,14 @@ public class AgentThinkHandler(
             SetContextValue(context, "agent:directAnswer",
                 $"I'm sorry, I was unable to complete this step — the tool '{loopingTool}' " +
                 "failed repeatedly. Please try again or rephrase your request.");
-            await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
-            return StageResult.Error($"Tool loop detected for '{loopingTool}' — responder appended.", "TOOL_LOOP");
+            context.LogWarning($"Tool loop detected [tool={loopingTool}, consecutiveFailures>={MaxConsecutiveToolFailures}]");
+            await EnsureResponderStageAppendedAsync(pipelineId, context);
+            return new StageResultDto
+            {
+                Result = $"Tool loop detected for '{loopingTool}' — responder appended.",
+                IsSuccess = true,
+                ErrorCode = "TOOL_LOOP",
+            };
         }
 
         // Check token budget before calling the LLM
@@ -111,8 +120,14 @@ public class AgentThinkHandler(
         {
             SetContextValue(context, "agent:directAnswer",
                 "The agent stopped because the token or cost budget for this session was exceeded.");
-            await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
-            return StageResult.Error("Token budget exceeded — responder appended.", "BUDGET_EXCEEDED");
+            context.LogWarning("Token or cost budget exceeded. Switching to responder.");
+            await EnsureResponderStageAppendedAsync(pipelineId, context);
+            return new StageResultDto
+            {
+                Result = "Token budget exceeded — responder appended.",
+                IsSuccess = true,
+                ErrorCode = "BUDGET_EXCEEDED",
+            };
         }
 
         // Emit progress notification
@@ -140,12 +155,15 @@ public class AgentThinkHandler(
         }
         catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))
         {
+            context.LogWarning($"LLM planner hit rate limit [{ex.Message.ToLogPreview(300)}]");
             return StageResult.RateLimitExceeded(
                 $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
         }
 
         // Accumulate token usage in context
         AccumulateTokenUsage(context, decision.TokenUsage);
+        context.LogInfo(
+            $"Think decision received [action={decision.Action}, tool={(decision.ToolCall?.Tool ?? "-")}, confirmations={decision.MutationsToConfirm?.Count ?? 0}, hasFinalAnswer={!string.IsNullOrWhiteSpace(decision.FinalAnswer)}, decisionPreview={decision.RawDecisionJson.ToLogPreview(800)}]");
 
         if (decision.Action == AgentThinkAction.CallTool &&
             decision.ToolCall != null &&
@@ -212,6 +230,8 @@ public class AgentThinkHandler(
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
         await SendToolCallProgressAsync(context, call.Tool);
+        context.LogInfo(
+            $"Scheduling tool call [tool={call.Tool}, resultKey={call.EffectiveResultKey}, params={call.Params.ToLogPreview(800)}]");
         await AppendStagesAsync(pipelineId, [BuildToolStage(call), BuildThinkStage()]);
 
         return StageResult.Success($"Think step {GetStep(context)}: calling tool '{call.Tool}'.");
@@ -231,6 +251,8 @@ public class AgentThinkHandler(
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
         // After confirmation, the think stage resumes the loop
+        context.LogInfo(
+            $"Scheduling confirmation flow [mutations={decision.MutationsToConfirm!.Count}, tools={string.Join(", ", decision.MutationsToConfirm!.Select(x => x.Tool))}]");
         await AppendStagesAsync(pipelineId, [
             BuildConfirmationStage(decision.MutationsToConfirm!),
             BuildThinkStage(),
@@ -247,7 +269,8 @@ public class AgentThinkHandler(
         if (!string.IsNullOrWhiteSpace(decision.FinalAnswer))
             SetContextValue(context, "agent:directAnswer", decision.FinalAnswer);
 
-        await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+        context.LogInfo($"Think loop completed. Final answer preview: {decision.FinalAnswer.ToLogPreview(800)}");
+        await EnsureResponderStageAppendedAsync(pipelineId, context);
 
         return StageResult.Success($"Think step {GetStep(context)}: reasoning complete — responder appended.");
     }
@@ -288,6 +311,10 @@ public class AgentThinkHandler(
     {
         StageName = "agent:responder",
         StageHandlerName = AgentConstants.ResponderHandlerName,
+        Options = new StageOptions
+        {
+            RunNextIfFailed = true,
+        },
     };
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -300,6 +327,19 @@ public class AgentThinkHandler(
     {
         var request = new AppendStagesRequest { Stages = stages.ToList() };
         await apiClient.AppendAgentStagesAsync(pipelineId, request);
+    }
+
+    private async Task EnsureResponderStageAppendedAsync(int pipelineId, IStageContext? context)
+    {
+        if (context.TryGetValue<bool>(AgentConstants.ResponderAppended))
+        {
+            context.LogInfo("Responder stage already appended earlier. Skipping duplicate append.");
+            return;
+        }
+
+        await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+        SetContextValue(context, AgentConstants.ResponderAppended, true);
+        context.LogInfo("Responder stage appended.");
     }
 
     private bool IsMutatingTool(string toolName)

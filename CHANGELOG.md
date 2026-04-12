@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.2] - 2026-04-12
+
+### Added
+
+- Detailed stage lifecycle logging, including execution start/finish records, input/output previews, and richer agent-stage diagnostics for think, tool, confirmation, orchestrator, and responder handlers.
+
+### Changed
+
+- Agent terminal flows now append `agent:responder` idempotently and mark responder stages with `RunNextIfFailed`, keeping the conversation recoverable after terminal tool-loop and budget conditions.
+
+### Fixed
+
+- ReAct-style agent pipelines no longer create duplicate responder stages in loop-protection paths.
+- Responder follow-up stages now execute correctly after upstream failed agent stages when the runtime honors `run_next_if_failed`.
+
 ## [0.3.0-preview.1] - 2026-04-07
 
 ### Added
@@ -67,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.1...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.2...HEAD
+[0.3.0-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.2
 [0.3.0-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.1
 [0.1.0]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.1.0

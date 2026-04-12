@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PipelogiqSDK.Abstractions;
+using PipelogiqSDK.Contracts;
 
 namespace PipelogiqSDK.StageHelper;
 
@@ -42,5 +43,75 @@ public static class StageContextExtension
         }
 
         return default;
+    }
+
+    /// <summary>
+    /// Writes an information log entry when the execution context has a stage logger attached.
+    /// </summary>
+    public static void LogInfo(this IStageContext? stageContext, string message)
+        => Log(stageContext, message, "info");
+
+    /// <summary>
+    /// Writes a warning log entry when the execution context has a stage logger attached.
+    /// </summary>
+    public static void LogWarning(this IStageContext? stageContext, string message)
+        => Log(stageContext, message, "warning");
+
+    /// <summary>
+    /// Writes an error log entry when the execution context has a stage logger attached.
+    /// </summary>
+    public static void LogError(this IStageContext? stageContext, string message)
+        => Log(stageContext, message, "error");
+
+    /// <summary>
+    /// Serializes an arbitrary value into a compact preview suitable for stage logs.
+    /// </summary>
+    public static string ToLogPreview(this object? value, int maxLength = 1200)
+    {
+        if (value == null)
+            return "null";
+
+        string text;
+        try
+        {
+            text = value switch
+            {
+                string s => s,
+                JsonElement element => element.GetRawText(),
+                _ => JsonSerializer.Serialize(value),
+            };
+        }
+        catch
+        {
+            text = value.ToString() ?? string.Empty;
+        }
+
+        text = text.Replace("\r", " ").Replace("\n", " ").Trim();
+        if (text.Length <= maxLength)
+            return text;
+
+        return text[..maxLength] + "...";
+    }
+
+    private static void Log(IStageContext? stageContext, string message, string level)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+
+        if (stageContext is not StageContext concreteContext || concreteContext.Logger == null)
+            return;
+
+        switch (level)
+        {
+            case "warning":
+                concreteContext.Logger.Warning(message);
+                break;
+            case "error":
+                concreteContext.Logger.Error(message);
+                break;
+            default:
+                concreteContext.Logger.Info(message);
+                break;
+        }
     }
 }
