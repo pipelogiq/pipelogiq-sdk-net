@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using PipelogiqSDK.Abstractions;
 using PipelogiqSDK.Api;
@@ -26,11 +27,13 @@ public class PipelineRunner
     private readonly PipelogiqRunnerOptions _runnerOptions;
     private readonly StageExecutor _stageExecutor;
     private readonly SemaphoreSlim _publishLock = new(1, 1);
+    private readonly SemaphoreSlim _workerEventFlushLock = new(1, 1);
     private readonly object _stateSync = new();
 
     private readonly Dictionary<string, Type> _handlerTypes = new();
     private readonly Dictionary<string, IStageHandler> _handlerInstances = new();
     private readonly List<IModel> _consumerChannels = new();
+    private readonly ConcurrentQueue<WorkerEventItem> _pendingWorkerEvents = new();
     private readonly object _queueStatusSync = new();
     private readonly HashSet<string> _activeStageNextQueues = new(StringComparer.Ordinal);
     private readonly HashSet<string> _missingStageNextQueues = new(StringComparer.Ordinal);
@@ -112,7 +115,18 @@ public class PipelineRunner
     /// <param name="stoppingToken">Cancellation token.</param>
     public async Task StartAsync(CancellationToken stoppingToken)
     {
-        var supportedHandlers = GetRegisteredHandlerNames();
+        IReadOnlyCollection<string> supportedHandlers;
+        try
+        {
+            supportedHandlers = GetRegisteredHandlerNames();
+        }
+        catch (Exception ex)
+        {
+            SetState(WorkerStates.Error, "Worker startup failed before bootstrap.", ex.Message);
+            _logger.LogError(ex, "Worker startup failed before bootstrap.");
+            throw;
+        }
+
         _process.Refresh();
         _lastCpuSampleAt = DateTimeOffset.UtcNow;
         _lastCpuTotal = _process.TotalProcessorTime;
@@ -132,6 +146,15 @@ public class PipelineRunner
             catch (Exception ex)
             {
                 SetState(WorkerStates.Error, "Worker bootstrap failed.", ex.Message);
+                EnqueueWorkerEvent(
+                    "ERROR",
+                    "worker.bootstrap_failed",
+                    "Worker bootstrap failed.",
+                    new Dictionary<string, object?>
+                    {
+                        ["error"] = ex.Message,
+                        ["retryDelaySec"] = (int)RetryDelay.TotalSeconds,
+                    });
                 _logger.LogWarning(ex, "Worker bootstrap failed. Retrying in {RetryDelay}.", RetryDelay);
                 await DelayBeforeRetry(stoppingToken);
                 continue;
@@ -160,17 +183,46 @@ public class PipelineRunner
                     catch (WorkerConfigurationException ex)
                     {
                         SetState(WorkerStates.Degraded, "Worker configuration is invalid.", ex.Message);
+                        EnqueueWorkerEvent(
+                            "WARN",
+                            "worker.configuration_invalid",
+                            "Worker configuration is invalid.",
+                            new Dictionary<string, object?>
+                            {
+                                ["error"] = ex.Message,
+                                ["retryDelaySec"] = (int)RetryDelay.TotalSeconds,
+                            });
                         _logger.LogWarning(ex, "Worker configuration error. Retrying in {RetryDelay}.", RetryDelay);
                     }
                     catch (OperationInterruptedException ex) when (IsPreconditionFailed(ex))
                     {
                         var reason = ex.ShutdownReason?.ReplyText ?? ex.Message;
                         SetState(WorkerStates.Degraded, "RabbitMQ queue configuration mismatch.", reason);
+                        EnqueueWorkerEvent(
+                            "WARN",
+                            "worker.queue_mismatch",
+                            "RabbitMQ queue configuration mismatch.",
+                            new Dictionary<string, object?>
+                            {
+                                ["error"] = reason,
+                                ["replyCode"] = ex.ShutdownReason?.ReplyCode,
+                                ["retryDelaySec"] = (int)RetryDelay.TotalSeconds,
+                            });
                         _logger.LogWarning(ex, "RabbitMQ PRECONDITION_FAILED (406). Retrying in {RetryDelay}.", RetryDelay);
                     }
                     catch (Exception ex)
                     {
                         SetState(WorkerStates.Degraded, "Broker connection failed.", ex.Message);
+                        EnqueueWorkerEvent(
+                            "WARN",
+                            "worker.broker_connection_failed",
+                            "Broker connection failed.",
+                            new Dictionary<string, object?>
+                            {
+                                ["error"] = ex.Message,
+                                ["exceptionType"] = ex.GetType().Name,
+                                ["retryDelaySec"] = (int)RetryDelay.TotalSeconds,
+                            });
                         _logger.LogWarning(ex, "RabbitMQ connection attempt failed.");
                     }
                     finally
@@ -233,6 +285,7 @@ public class PipelineRunner
         ResetStageNextQueueCoverage();
 
         SetState(WorkerStates.Starting, "Worker bootstrap completed.");
+        await FlushPendingWorkerEventsAsync(stoppingToken);
     }
 
     private WorkerBootstrapRequest BuildBootstrapRequest(IReadOnlyCollection<string> supportedHandlers)
@@ -317,6 +370,7 @@ public class PipelineRunner
             try
             {
                 await _apiClient.PostWorkerHeartbeatAsync(_workerSessionToken, BuildHeartbeatRequest(), stoppingToken);
+                await FlushPendingWorkerEventsAsync(stoppingToken);
 
                 if (_connection?.IsOpen == true)
                     SetReadyStateForCurrentConnection();
@@ -329,6 +383,15 @@ public class PipelineRunner
             {
                 _sessionInvalid = true;
                 SetState(WorkerStates.Degraded, "Worker session rejected by server.", ex.Message);
+                EnqueueWorkerEvent(
+                    "ERROR",
+                    "worker.session_rejected",
+                    "Worker session rejected by server.",
+                    new Dictionary<string, object?>
+                    {
+                        ["statusCode"] = ex.StatusCode?.ToString(),
+                        ["error"] = ex.Message,
+                    });
                 _logger.LogWarning(
                     "Worker heartbeat rejected with {StatusCode}. Re-bootstrap is required.",
                     ex.StatusCode);
@@ -337,6 +400,15 @@ public class PipelineRunner
             catch (Exception ex)
             {
                 SetState(WorkerStates.Degraded, "Failed to send heartbeat.", ex.Message);
+                EnqueueWorkerEvent(
+                    "WARN",
+                    "worker.heartbeat_failed",
+                    "Failed to send heartbeat.",
+                    new Dictionary<string, object?>
+                    {
+                        ["error"] = ex.Message,
+                        ["exceptionType"] = ex.GetType().Name,
+                    });
                 _logger.LogWarning(ex, "Failed to send worker heartbeat.");
             }
 
@@ -476,6 +548,14 @@ public class PipelineRunner
         {
             Interlocked.Increment(ref _jobsFailed);
             SetState(WorkerStates.Degraded, "Received malformed stage payload.", ex.Message);
+            EnqueueWorkerEvent(
+                "WARN",
+                "worker.stage_payload_invalid",
+                "Received malformed stage payload.",
+                new Dictionary<string, object?>
+                {
+                    ["error"] = ex.Message,
+                });
             _logger.LogWarning(ex, "Received malformed StageNext payload.");
             SafeAck(channel, delivery.DeliveryTag);
             return;
@@ -510,6 +590,17 @@ public class PipelineRunner
         {
             Interlocked.Increment(ref _jobsFailed);
             SetState(WorkerStates.Degraded, "Stage processing failed.", ex.Message);
+            EnqueueWorkerEvent(
+                "ERROR",
+                "worker.stage_processing_failed",
+                $"Stage processing failed for stage {parsedMessage.StageId}.",
+                new Dictionary<string, object?>
+                {
+                    ["stageId"] = parsedMessage.StageId,
+                    ["pipelineId"] = parsedMessage.PipelineId,
+                    ["handler"] = parsedMessage.StageHandlerName,
+                    ["error"] = ex.Message,
+                });
             _logger.LogError(
                 ex,
                 "Processing failed for stage {StageId}. Message disposition follows DLQ settings.",
@@ -973,23 +1064,42 @@ public class PipelineRunner
 
     private void SetState(string state, string? message = null, string? error = null)
     {
+        string previousState;
+        string? previousMessage;
+        string? previousError;
+        string? nextMessage;
+        string? nextError;
+
         lock (_stateSync)
         {
-            _workerState = state;
+            previousState = _workerState;
+            previousMessage = _statusMessage;
+            previousError = _lastError;
 
-            if (!string.IsNullOrWhiteSpace(message))
-                _statusMessage = message;
-
+            nextMessage = string.IsNullOrWhiteSpace(message) ? _statusMessage : message.Trim();
             if (string.IsNullOrWhiteSpace(error))
             {
-                if (state is WorkerStates.Ready or WorkerStates.Starting)
-                    _lastError = null;
+                nextError = state is WorkerStates.Ready or WorkerStates.Starting ? null : _lastError;
             }
             else
             {
-                _lastError = error;
+                nextError = error.Trim();
             }
+
+            if (previousState == state &&
+                string.Equals(previousMessage, nextMessage, StringComparison.Ordinal) &&
+                string.Equals(previousError, nextError, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _workerState = state;
+            _statusMessage = nextMessage;
+            _lastError = nextError;
         }
+
+        LogStateTransition(previousState, state, nextMessage, nextError);
+        EnqueueStateTransitionEvent(previousState, state, nextMessage, nextError);
     }
 
     private (string State, string? Message, string? LastError) SnapshotState()
@@ -1007,6 +1117,8 @@ public class PipelineRunner
 
         try
         {
+            await FlushPendingWorkerEventsAsync(stoppingToken);
+
             var shutdownRequest = new WorkerShutdownRequest
             {
                 WorkerId = _workerId,
@@ -1033,6 +1145,146 @@ public class PipelineRunner
     private static bool IsSessionAuthFailure(HttpRequestException ex)
     {
         return ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+    }
+
+    private void LogStateTransition(string previousState, string nextState, string? message, string? error)
+    {
+        var logMessage = BuildStateLogMessage(previousState, nextState, message, error);
+        switch (nextState)
+        {
+            case WorkerStates.Error:
+                _logger.LogError("{Message}", logMessage);
+                break;
+            case WorkerStates.Degraded:
+                _logger.LogWarning("{Message}", logMessage);
+                break;
+            default:
+                _logger.LogInformation("{Message}", logMessage);
+                break;
+        }
+    }
+
+    private void EnqueueStateTransitionEvent(string previousState, string nextState, string? message, string? error)
+    {
+        var details = new Dictionary<string, object?>
+        {
+            ["from"] = previousState,
+            ["to"] = nextState,
+        };
+
+        if (!string.IsNullOrWhiteSpace(message))
+            details["statusReason"] = message;
+
+        if (!string.IsNullOrWhiteSpace(error))
+            details["lastError"] = error;
+
+        var eventType = previousState == nextState ? "worker.status_updated" : "worker.state_changed";
+        EnqueueWorkerEvent(
+            nextState is WorkerStates.Error ? "ERROR" : nextState is WorkerStates.Degraded ? "WARN" : "INFO",
+            eventType,
+            BuildStateLogMessage(previousState, nextState, message, error),
+            details);
+    }
+
+    private void EnqueueWorkerEvent(
+        string level,
+        string eventType,
+        string message,
+        Dictionary<string, object?>? details = null)
+    {
+        if (string.IsNullOrWhiteSpace(eventType) || string.IsNullOrWhiteSpace(message))
+            return;
+
+        _pendingWorkerEvents.Enqueue(new WorkerEventItem
+        {
+            Timestamp = DateTime.UtcNow,
+            Level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.Trim().ToUpperInvariant(),
+            EventType = eventType.Trim(),
+            Message = message.Trim(),
+            Details = details is { Count: > 0 } ? details : null,
+        });
+
+        if (!string.IsNullOrWhiteSpace(_workerId) && !string.IsNullOrWhiteSpace(_workerSessionToken))
+            _ = Task.Run(() => FlushPendingWorkerEventsAsync(CancellationToken.None));
+    }
+
+    private async Task FlushPendingWorkerEventsAsync(CancellationToken stoppingToken)
+    {
+        if (string.IsNullOrWhiteSpace(_workerId) || string.IsNullOrWhiteSpace(_workerSessionToken))
+            return;
+
+        if (_pendingWorkerEvents.IsEmpty)
+            return;
+
+        if (!await _workerEventFlushLock.WaitAsync(0, stoppingToken))
+            return;
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested && !_pendingWorkerEvents.IsEmpty)
+            {
+                var batch = new List<WorkerEventItem>();
+                while (batch.Count < 50 && _pendingWorkerEvents.TryDequeue(out var item))
+                    batch.Add(item);
+
+                if (batch.Count == 0)
+                    return;
+
+                try
+                {
+                    await _apiClient.PostWorkerEventAsync(_workerSessionToken, new WorkerEventRequest
+                    {
+                        WorkerId = _workerId!,
+                        Events = batch,
+                    }, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    RequeueWorkerEvents(batch);
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    RequeueWorkerEvents(batch);
+                    _logger.LogDebug(ex, "Failed to flush worker diagnostic events.");
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            _workerEventFlushLock.Release();
+        }
+    }
+
+    private void RequeueWorkerEvents(IEnumerable<WorkerEventItem> events)
+    {
+        foreach (var item in events)
+            _pendingWorkerEvents.Enqueue(item);
+    }
+
+    private static string BuildStateLogMessage(string previousState, string nextState, string? message, string? error)
+    {
+        var builder = new StringBuilder();
+        if (previousState == nextState)
+        {
+            builder.Append("Worker status updated");
+        }
+        else
+        {
+            builder.Append("Worker state changed from ")
+                .Append(previousState)
+                .Append(" to ")
+                .Append(nextState);
+        }
+
+        if (!string.IsNullOrWhiteSpace(message))
+            builder.Append(": ").Append(message.Trim());
+
+        if (!string.IsNullOrWhiteSpace(error))
+            builder.Append(" [error=").Append(error.Trim()).Append(']');
+
+        return builder.ToString();
     }
 
     private bool ShouldRequeueAfterFailure()

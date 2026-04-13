@@ -72,15 +72,15 @@ public class AgentToolHandler(
             }
 
             // Dispatch: native handler takes priority over HTTP
+            var validatedParams = ValidateAndCoerceParams(toolDef, resolvedParams);
             var nativeHandler = toolRegistry.FindNativeHandler(input.ToolName);
             if (nativeHandler != null)
             {
                 context.LogInfo($"Dispatching native tool handler [tool={input.ToolName}]");
-                result = await ExecuteNativeToolAsync(nativeHandler, input, resolvedParams, context, default);
+                result = await ExecuteNativeToolAsync(nativeHandler, input, validatedParams, context, default);
             }
             else
             {
-                var validatedParams = ValidateAndCoerceParams(toolDef, resolvedParams);
                 context.LogInfo($"Dispatching HTTP tool call [tool={input.ToolName}, method={toolDef.HttpMethod}, target={toolDef.TargetApiName ?? toolDef.BaseUrl ?? toolDef.UrlTemplate}]");
                 result = await ExecuteToolCallAsync(toolDef, validatedParams, input.ResultKey, context, default);
             }
@@ -110,7 +110,9 @@ public class AgentToolHandler(
         var failureKey = AgentConstants.ToolFailureCountPrefix + input.ToolName;
         if (result.IsSuccess)
         {
-            context.Payload.Remove(failureKey);
+            // Context items are append-only in the current runtime store, so removing a key
+            // does not reliably clear it for later stages. Persist an explicit zero instead.
+            context.Payload[failureKey] = 0;
             context.LogInfo(
                 $"Tool execution completed [tool={input.ToolName}, success=true, statusCode={result.StatusCode}, response={result.ResponseBody.ToLogPreview(800)}]");
         }

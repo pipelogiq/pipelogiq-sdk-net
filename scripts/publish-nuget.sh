@@ -2,10 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/artifacts/packages}"
 NUGET_SOURCE="${NUGET_SOURCE:-https://api.nuget.org/v3/index.json}"
+PUSH_PACKAGES="${PUSH_PACKAGES:-true}"
+VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$ROOT_DIR/src/Pipelogiq.Sdk/PipelogiqSDK.csproj" | head -n 1)"
+OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/artifacts/packages/$VERSION}"
 
-if [[ -z "${NUGET_API_KEY:-}" ]]; then
+if [[ -z "$VERSION" ]]; then
+  echo "Unable to determine package version from PipelogiqSDK.csproj." >&2
+  exit 1
+fi
+
+if [[ "$PUSH_PACKAGES" == "true" && -z "${NUGET_API_KEY:-}" ]]; then
   echo "NUGET_API_KEY is required." >&2
   exit 1
 fi
@@ -19,11 +26,16 @@ projects=(
   "$ROOT_DIR/src/Pipelogiq.Sdk.Testing/Pipelogiq.Sdk.Testing.csproj"
 )
 
-dotnet restore "$ROOT_DIR/PipelogiqSdk.sln"
+dotnet restore "$ROOT_DIR/PipelogiqSdk.sln" --disable-build-servers
 
 for project in "${projects[@]}"; do
-  dotnet pack "$project" -c Release -o "$OUTPUT_DIR" --no-restore
+  dotnet pack "$project" -c Release -o "$OUTPUT_DIR" --no-restore --disable-build-servers
 done
+
+if [[ "$PUSH_PACKAGES" != "true" ]]; then
+  echo "Packages built in $OUTPUT_DIR"
+  exit 0
+fi
 
 shopt -s nullglob
 

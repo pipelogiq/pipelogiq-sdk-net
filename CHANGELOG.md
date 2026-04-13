@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.3] - 2026-04-12
+
+### Added
+
+- Worker diagnostic events now capture bootstrap failures, queue mismatches, session rejection, heartbeat failures, invalid stage payloads, and stage-processing failures with structured details.
+- Dashboard worker activity now renders detailed event payloads so startup and degraded-state problems are visible without digging through server logs.
+
+### Changed
+
+- Worker state transitions now emit richer status updates that preserve `statusReason`, `lastError`, broker connectivity, and queue-lag context across the SDK and API boundary.
+- Worker registry now shows status reason and last error inline, making degraded workers explain themselves directly in the UI.
+
 ## [0.3.0-preview.2] - 2026-04-12
 
 ### Added
@@ -82,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.2...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.3...HEAD
+[0.3.0-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.3
 [0.3.0-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.2
 [0.3.0-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.1
 [0.1.0]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.1.0

@@ -142,6 +142,107 @@ public sealed class AgentToolHandlerParameterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithNativeTool_MissingRequiredParam_ReturnsToolErrorWithoutInvokingHandler()
+    {
+        var tool = new AgentToolDefinition
+        {
+            Name = "saveBudgetResult",
+            Description = "Persists budget rows.",
+            HttpMethod = "POST",
+            UrlTemplate = "/native/saveBudgetResult",
+            Params = new Dictionary<string, AgentToolParam>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["projectId"] = new() { In = "body", Type = "string", Required = true, Description = "Project id." },
+                ["jobId"] = new() { In = "body", Type = "string", Required = true, Description = "Job id." },
+                ["lineItems"] = new() { In = "body", Type = "array", Required = true, Description = "Budget rows." },
+            }
+        };
+
+        var nativeHandler = new RecordingNativeHandler();
+        var handler = new AgentToolHandler(
+            new StaticToolRegistry([tool], new Dictionary<string, IAgentToolHandler>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["saveBudgetResult"] = nativeHandler,
+            }),
+            new AgentOptions(),
+            new StaticHttpClientFactory(new HttpClient(new RecordingHttpMessageHandler())));
+
+        var context = new StageContext
+        {
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase),
+        };
+
+        var result = await handler.ExecuteAsync(new AgentToolCallInput
+        {
+            ToolName = "saveBudgetResult",
+            ResultKey = "saveBudgetResult",
+            Params = new Dictionary<string, object?>
+            {
+                ["projectId"] = "project-1",
+                ["jobId"] = "job-1",
+            }
+        }, context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(0, nativeHandler.CallCount);
+        Assert.Contains("requires parameter 'lineItems'", Assert.IsType<string>(context.Payload!["agent:result:saveBudgetResult"]));
+        Assert.Equal(1, Convert.ToInt32(context.Payload!["agent:toolFailures:saveBudgetResult"]));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenToolLaterSucceeds_ResetsFailureCounterToZero()
+    {
+        var tool = new AgentToolDefinition
+        {
+            Name = "saveBudgetResult",
+            Description = "Persists budget rows.",
+            HttpMethod = "POST",
+            UrlTemplate = "/native/saveBudgetResult",
+            Params = new Dictionary<string, AgentToolParam>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["projectId"] = new() { In = "body", Type = "string", Required = true, Description = "Project id." },
+            }
+        };
+
+        var nativeHandler = new SequencedNativeHandler(
+        [
+            AgentToolOutput.Failure("first failure"),
+            AgentToolOutput.Success("saved"),
+        ]);
+
+        var handler = new AgentToolHandler(
+            new StaticToolRegistry([tool], new Dictionary<string, IAgentToolHandler>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["saveBudgetResult"] = nativeHandler,
+            }),
+            new AgentOptions(),
+            new StaticHttpClientFactory(new HttpClient(new RecordingHttpMessageHandler())));
+
+        var context = new StageContext
+        {
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase),
+        };
+
+        await handler.ExecuteAsync(new AgentToolCallInput
+        {
+            ToolName = "saveBudgetResult",
+            ResultKey = "saveBudgetResult",
+            Params = new Dictionary<string, object?> { ["projectId"] = "project-1" }
+        }, context);
+
+        Assert.Equal(1, Convert.ToInt32(context.Payload!["agent:toolFailures:saveBudgetResult"]));
+
+        await handler.ExecuteAsync(new AgentToolCallInput
+        {
+            ToolName = "saveBudgetResult",
+            ResultKey = "saveBudgetResult",
+            Params = new Dictionary<string, object?> { ["projectId"] = "project-1" }
+        }, context);
+
+        Assert.Equal(0, Convert.ToInt32(context.Payload!["agent:toolFailures:saveBudgetResult"]));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithNamedTargetApis_UsesPerApiBaseUrlAndHeadersFromContext()
     {
         var lookupCustomer = new AgentToolDefinition
@@ -324,14 +425,46 @@ public sealed class AgentToolHandlerParameterTests
             }, new StageContext()));
     }
 
-    private sealed class StaticToolRegistry(IReadOnlyList<AgentToolDefinition> tools) : IAgentToolRegistry
+    private sealed class StaticToolRegistry(
+        IReadOnlyList<AgentToolDefinition> tools,
+        IReadOnlyDictionary<string, IAgentToolHandler>? nativeHandlers = null) : IAgentToolRegistry
     {
         public IReadOnlyList<AgentToolDefinition> GetAll() => tools;
 
         public AgentToolDefinition? Find(string name) =>
             tools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
 
-        public IAgentToolHandler? FindNativeHandler(string name) => null;
+        public IAgentToolHandler? FindNativeHandler(string name) =>
+            nativeHandlers != null && nativeHandlers.TryGetValue(name, out var handler) ? handler : null;
+    }
+
+    private sealed class RecordingNativeHandler : IAgentToolHandler
+    {
+        public int CallCount { get; private set; }
+
+        public Task<AgentToolOutput> ExecuteAsync(
+            IReadOnlyDictionary<string, object?> parameters,
+            IStageContext? context = null,
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            return Task.FromResult(AgentToolOutput.Success("ok"));
+        }
+    }
+
+    private sealed class SequencedNativeHandler(IReadOnlyList<AgentToolOutput> outputs) : IAgentToolHandler
+    {
+        private int _index;
+
+        public Task<AgentToolOutput> ExecuteAsync(
+            IReadOnlyDictionary<string, object?> parameters,
+            IStageContext? context = null,
+            CancellationToken ct = default)
+        {
+            var current = _index < outputs.Count ? outputs[_index] : outputs[^1];
+            _index++;
+            return Task.FromResult(current);
+        }
     }
 
     private sealed class StaticHttpClientFactory(HttpClient httpClient) : IHttpClientFactory
