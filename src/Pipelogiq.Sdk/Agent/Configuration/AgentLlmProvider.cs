@@ -10,4 +10,7 @@ public enum AgentLlmProvider
 
     /// <summary>Ollama local chat API.</summary>
     Ollama = 1,
+
+    /// <summary>OpenAI chat completions API.</summary>
+    OpenAI = 2,
 }

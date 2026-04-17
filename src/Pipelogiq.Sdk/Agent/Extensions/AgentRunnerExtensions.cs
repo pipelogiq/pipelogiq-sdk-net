@@ -21,6 +21,7 @@ public static class AgentRunnerExtensions
         // AgentResponderHandler and AgentThinkHandler implement IStageHandler (no input)
         runner.RegisterHandler<AgentResponderHandler>(AgentConstants.ResponderHandlerName);
         runner.RegisterHandler<AgentThinkHandler>(AgentConstants.ThinkHandlerName);
+        runner.RegisterHandler<AgentCriticHandler>(AgentConstants.CriticHandlerName);
         return runner;
     }
 }

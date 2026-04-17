@@ -35,12 +35,13 @@ public class AgentThinkHandler(
     {
         var pipelineId = context?.PipelineId
             ?? throw new InvalidOperationException("PipelineId is required for AgentThinkHandler.");
+        var sessionId = context.TryGetValue<string>(AgentConstants.SessionId);
 
         // Guard: prevent infinite loops
         var stepCount = context.TryGetValue<int>(AgentConstants.ThinkStepCount);
         stepCount++;
         SetContextValue(context, AgentConstants.ThinkStepCount, stepCount);
-        context.LogInfo($"Think step started [step={stepCount}, pipelineId={pipelineId}]");
+        context.LogInfo($"Think step started [step={stepCount}, pipelineId={pipelineId}, sessionId={sessionId ?? "-"}]");
 
         if (stepCount > agentOptions.MaxThinkSteps)
         {
@@ -63,7 +64,13 @@ public class AgentThinkHandler(
         {
             history = await LoadSessionHistoryAsync(originalMessage, context) ?? history;
             SetContextValue(context, AgentConstants.ConversationHistory, history);
+            context.LogInfo(
+                $"Session history bootstrap completed [sessionId={sessionId ?? "-"}, loadedTurns={history.Count}, historyTypes={SummarizeHistoryTypes(history)}]");
         }
+
+        var tools = toolRegistry.GetAll();
+        context.LogInfo(
+            $"Think context prepared [step={stepCount}, sessionId={sessionId ?? "-"}, tools={tools.Count}, historyTurns={history.Count}, toolResults={GetToolResultCount(context)}, payloadKeys={context.Payload?.Count ?? 0}, messagePreview={originalMessage.ToLogPreview(400)}]");
 
         // Handle post-confirmation resume: approved/rejected decision is in context
         var approved = context.TryGetValue<bool?>(AgentConstants.ApprovalDecision);
@@ -94,8 +101,6 @@ public class AgentThinkHandler(
             // Clear approval flag so next think step starts fresh
             context.Payload!.Remove(AgentConstants.ApprovalDecision);
         }
-
-        var tools = toolRegistry.GetAll();
 
         // Check for tool loop: if any single tool has failed 3 times in a row,
         // stop reasoning and let the agent apologise to the user instead of looping.
@@ -165,6 +170,19 @@ public class AgentThinkHandler(
         context.LogInfo(
             $"Think decision received [action={decision.Action}, tool={(decision.ToolCall?.Tool ?? "-")}, confirmations={decision.MutationsToConfirm?.Count ?? 0}, hasFinalAnswer={!string.IsNullOrWhiteSpace(decision.FinalAnswer)}, decisionPreview={decision.RawDecisionJson.ToLogPreview(800)}]");
 
+        if (decision.Action == AgentThinkAction.CallTool && decision.ToolCall != null)
+        {
+            context.LogInfo(
+                $"Think selected tool [tool={decision.ToolCall.Tool}, resultKey={decision.ToolCall.EffectiveResultKey}, paramKeys={string.Join(",", decision.ToolCall.Params.Keys.OrderBy(x => x))}]");
+
+            if (string.Equals(decision.ToolCall.Tool, "saveBudgetResult", StringComparison.OrdinalIgnoreCase) &&
+                !HasExplicitBudgetRows(decision.ToolCall.Params))
+            {
+                context.LogWarning(
+                    $"Think selected saveBudgetResult without explicit rows [sessionId={sessionId ?? "-"}, step={stepCount}, params={decision.ToolCall.Params.ToLogPreview(800)}]");
+            }
+        }
+
         if (decision.Action == AgentThinkAction.CallTool &&
             decision.ToolCall != null &&
             agentOptions.RequireConfirmationForMutations &&
@@ -198,6 +216,10 @@ public class AgentThinkHandler(
 
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
+        var overrides = context.TryGetValue<AgentRunOverrides>(AgentConstants.RunOverrides);
+        if (overrides != null && ShouldRouteToCritic(decision, overrides))
+            return await RouteToCriticAsync(pipelineId, decision, context);
+
         return decision.Action switch
         {
             AgentThinkAction.CallTool when decision.ToolCall != null
@@ -209,6 +231,46 @@ public class AgentThinkHandler(
             _ => await HandleDoneAsync(pipelineId, decision, context),
         };
     }
+
+    private bool ShouldRouteToCritic(AgentThinkDecision decision, AgentRunOverrides overrides)
+    {
+        if (overrides.CriticMode == AgentCriticMode.Off)
+            return false;
+
+        return overrides.CriticMode switch
+        {
+            AgentCriticMode.CriticOnEveryStep => true,
+            AgentCriticMode.CriticOnFinal => decision.Action == AgentThinkAction.Done,
+            AgentCriticMode.CriticOnMutating => decision.Action switch
+            {
+                AgentThinkAction.Done => true,
+                AgentThinkAction.NeedConfirmation => true,
+                AgentThinkAction.CallTool when decision.ToolCall != null => IsMutatingTool(decision.ToolCall.Tool),
+                _ => false,
+            },
+            _ => false,
+        };
+    }
+
+    private async Task<IStageResult> RouteToCriticAsync(int pipelineId, AgentThinkDecision decision, IStageContext context)
+    {
+        SetContextValue(context, AgentConstants.PendingProposal, decision);
+        context.LogInfo(
+            $"Think proposal routed to critic [action={decision.Action}, tool={(decision.ToolCall?.Tool ?? "-")}]");
+        await AppendStagesAsync(pipelineId, [BuildCriticStage()]);
+        return StageResult.Success($"Think step {GetStep(context)}: proposal sent to critic for review.");
+    }
+
+    private static StageInfo BuildCriticStage() => new()
+    {
+        StageName = "agent:critic",
+        StageHandlerName = AgentConstants.CriticHandlerName,
+        Options = new StageOptions
+        {
+            RetryInterval = RateLimitRetryIntervalSeconds,
+            MaxRetries = RateLimitMaxRetries,
+        },
+    };
 
     // ── Decision handlers ────────────────────────────────────────────────────
 
@@ -563,7 +625,11 @@ public class AgentThinkHandler(
         if (string.IsNullOrEmpty(sessionId)) return null;
 
         var previous = await sessionStore.LoadAsync(sessionId);
-        if (previous == null || previous.Count == 0) return null;
+        if (previous == null || previous.Count == 0)
+        {
+            context?.LogInfo($"No prior session history found [sessionId={sessionId}]");
+            return null;
+        }
 
         // Cap to avoid token explosion on very long sessions
         var recent = previous.Count > MaxSessionTurns
@@ -577,7 +643,43 @@ public class AgentThinkHandler(
             Content = originalMessage,
         });
 
+        context?.LogInfo(
+            $"Loaded prior session history [sessionId={sessionId}, storedTurns={previous.Count}, carriedTurns={recent.Count}, historyTypes={SummarizeHistoryTypes(recent)}]");
+
         return recent;
+    }
+
+    private static int GetToolResultCount(IStageContext? context) =>
+        context?.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults)?.Count ?? 0;
+
+    private static string SummarizeHistoryTypes(IReadOnlyList<AgentConversationTurn> history)
+    {
+        if (history.Count == 0)
+            return "-";
+
+        return string.Join(">", history.Select(x => x.Type).TakeLast(8));
+    }
+
+    private static bool HasExplicitBudgetRows(IReadOnlyDictionary<string, object?> parameters)
+    {
+        foreach (var alias in new[] { "lineItems", "items", "budgetRows", "rows" })
+        {
+            if (!parameters.TryGetValue(alias, out var value) || value == null)
+                continue;
+
+            if (value is string raw && !string.IsNullOrWhiteSpace(raw) && raw.TrimStart().StartsWith("[", StringComparison.Ordinal))
+                return true;
+
+            if (value is IEnumerable<object> enumerable && enumerable.Cast<object?>().Any())
+                return true;
+
+            if (value is JsonElement json &&
+                (json.ValueKind == JsonValueKind.Array && json.GetArrayLength() > 0 ||
+                 json.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(json.GetString())))
+                return true;
+        }
+
+        return false;
     }
 
     // ── Memory recall + context injection ────────────────────────────────────

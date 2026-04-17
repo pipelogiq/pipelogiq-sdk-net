@@ -95,7 +95,10 @@ public class AgentResponderHandler(
         toSave.AddRange(history);
         toSave.Add(new AgentConversationTurn { Type = "assistant_response", Content = finalResponse });
 
+        context?.LogInfo(
+            $"Persisting agent session history [sessionId={sessionId}, existingTurns={history.Count}, savedTurns={toSave.Count}, historyTypes={string.Join(">", toSave.Select(x => x.Type).TakeLast(8))}]");
         await sessionStore.SaveAsync(sessionId, toSave);
+        context?.LogInfo($"Agent session history persisted [sessionId={sessionId}]");
     }
 
     private async Task<IStageResult> SendOrFallbackAsync(IStageContext? context, string message)

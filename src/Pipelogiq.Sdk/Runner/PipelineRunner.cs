@@ -33,6 +33,7 @@ public class PipelineRunner
     private readonly Dictionary<string, Type> _handlerTypes = new();
     private readonly Dictionary<string, IStageHandler> _handlerInstances = new();
     private readonly List<IModel> _consumerChannels = new();
+    private readonly List<(IModel Channel, string ConsumerTag)> _activeConsumers = new();
     private readonly ConcurrentQueue<WorkerEventItem> _pendingWorkerEvents = new();
     private readonly object _queueStatusSync = new();
     private readonly HashSet<string> _activeStageNextQueues = new(StringComparer.Ordinal);
@@ -227,7 +228,14 @@ public class PipelineRunner
                     }
                     finally
                     {
-                        DisposeMessaging();
+                        if (stoppingToken.IsCancellationRequested)
+                        {
+                            CancelConsumers();
+                        }
+                        else
+                        {
+                            DisposeMessaging();
+                        }
                     }
 
                     if (sessionToken.IsCancellationRequested || _sessionInvalid)
@@ -238,6 +246,12 @@ public class PipelineRunner
             }
             finally
             {
+                if (stoppingToken.IsCancellationRequested)
+                {
+                    SetState(WorkerStates.Draining, "Worker draining.");
+                    await DrainInFlightJobsAsync(_runnerOptions.DrainGracePeriod);
+                }
+
                 sessionCts.Cancel();
                 await AwaitSilently(heartbeatTask);
                 DisposeMessaging();
@@ -254,9 +268,6 @@ public class PipelineRunner
 
             await DelayBeforeRetry(stoppingToken);
         }
-
-        if (stoppingToken.IsCancellationRequested)
-            SetState(WorkerStates.Draining, "Worker draining.");
 
         using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await TrySendShutdownAsync(shutdownCts.Token);
@@ -629,7 +640,9 @@ public class PipelineRunner
             executionData.Logger = logger;
             logger.Info(
                 $"Stage execution starting [stageId={stage.StageId}, handler={stage.StageHandlerName}, pipelineId={stage.PipelineId}, inputPreview={stage.Input.ToLogPreview(800)}]");
-            await SetStatusToRunning(stage.StageId, stoppingToken);
+
+            using var publishCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await SetStatusToRunning(stage.StageId, publishCts.Token);
 
             var stageResult = await _stageExecutor.ExecuteStageHandlerAsync(executionData);
 
@@ -655,9 +668,10 @@ public class PipelineRunner
             resultDto.Logs = logger.Logs;
         }
 
+        using var resultPublishCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var serializedResult = PipelineMessageSerializer.Serialize(resultDto);
         _logger.LogInformation("Publishing result for StageId {StageId}: {Payload}", stage.StageId, serializedResult);
-        await PublishToQueueAsync(_stageResultQueue, serializedResult, stoppingToken);
+        await PublishToQueueAsync(_stageResultQueue, serializedResult, resultPublishCts.Token);
 
         return resultDto.IsSuccess;
     }
@@ -790,8 +804,9 @@ public class PipelineRunner
         var consumer = new AsyncEventingBasicConsumer(consumerChannel);
         consumer.Received += (_, ea) => HandleMessageAsync(consumerChannel, ea, stoppingToken);
 
-        consumerChannel.BasicConsume(queue: queueName, autoAck: false, consumer: consumer);
+        var consumerTag = consumerChannel.BasicConsume(queue: queueName, autoAck: false, consumer: consumer);
         _consumerChannels.Add(consumerChannel);
+        _activeConsumers.Add((consumerChannel, consumerTag));
         MarkStageNextQueueSubscribed(queueName);
     }
 
@@ -1317,8 +1332,48 @@ public class PipelineRunner
         }
     }
 
+    private void CancelConsumers()
+    {
+        foreach (var (channel, consumerTag) in _activeConsumers)
+        {
+            try
+            {
+                if (channel.IsOpen)
+                    channel.BasicCancel(consumerTag);
+            }
+            catch
+            {
+            }
+        }
+
+        _activeConsumers.Clear();
+    }
+
+    private async Task DrainInFlightJobsAsync(TimeSpan timeout)
+    {
+        var inFlight = Interlocked.Read(ref _inFlightJobs);
+        if (inFlight == 0)
+            return;
+
+        _logger.LogInformation("Draining {InFlight} in-flight job(s), timeout {Timeout}s.", inFlight, (int)timeout.TotalSeconds);
+
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (Interlocked.Read(ref _inFlightJobs) > 0 && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(250);
+        }
+
+        var remaining = Interlocked.Read(ref _inFlightJobs);
+        if (remaining > 0)
+            _logger.LogWarning("Drain timeout reached. {Remaining} job(s) still in-flight.", remaining);
+        else
+            _logger.LogInformation("All in-flight jobs drained successfully.");
+    }
+
     private void DisposeMessaging()
     {
+        _activeConsumers.Clear();
+
         foreach (var channel in _consumerChannels)
             SafeDispose(channel);
 

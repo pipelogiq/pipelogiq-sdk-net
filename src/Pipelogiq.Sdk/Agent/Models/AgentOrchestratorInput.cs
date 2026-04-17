@@ -1,3 +1,5 @@
+using PipelogiqSDK.Agent.Configuration;
+
 namespace PipelogiqSDK.Agent.Models;
 
 /// <summary>
@@ -19,4 +21,10 @@ public class AgentOrchestratorInput
 
     /// <summary>Optional binary attachments (images, PDFs, audio) sent alongside the message.</summary>
     public List<AgentAttachment>? Attachments { get; set; }
+
+    /// <summary>
+    /// Per-pipeline overrides (e.g. second-model critic config). When null, the agent
+    /// runs with the global <see cref="AgentOptions"/> defaults and no critic.
+    /// </summary>
+    public AgentRunOverrides? RunOverrides { get; set; }
 }

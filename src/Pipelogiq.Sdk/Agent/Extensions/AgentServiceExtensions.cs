@@ -75,6 +75,12 @@ public static class AgentServiceExtensions
         services.TryAddTransient<AgentConfirmationHandler>();
         services.TryAddTransient<AgentResponderHandler>();
         services.TryAddTransient<AgentThinkHandler>();
+        services.TryAddTransient<AgentCriticHandler>();
+
+        // Critic implementations: both registered so the resolver can pick by provider
+        services.TryAddSingleton<OpenAiCritic>();
+        services.TryAddSingleton<ClaudeCritic>();
+        services.TryAddSingleton<IAgentCriticResolver, DefaultAgentCriticResolver>();
 
         services.AddHttpClient("pipelogiq-agent-llm");
         services.AddHttpClient("pipelogiq-agent-api", client =>

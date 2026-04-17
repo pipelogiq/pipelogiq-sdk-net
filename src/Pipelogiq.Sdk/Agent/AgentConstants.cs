@@ -21,6 +21,12 @@ internal static class AgentConstants
     public const string ConversationHistory = "agent:conversationHistory";
     public const string ThinkStepCount = "agent:thinkStepCount";
 
+    // Critic loop context keys
+    public const string RunOverrides = "agent:runOverrides";
+    public const string PendingProposal = "agent:pendingProposal";
+    public const string CriticRejectionCount = "agent:criticRejectionCount";
+    public const string LastCriticFeedback = "agent:lastCriticFeedback";
+
     // Loop detection: tracks consecutive failures per tool name.
     // Key format: "agent:toolFailures:{toolName}"
     public const string ToolFailureCountPrefix = "agent:toolFailures:";
@@ -38,4 +44,5 @@ internal static class AgentConstants
     public const string ConfirmationHandlerName = "AgentConfirmationHandler";
     public const string ResponderHandlerName = "AgentResponderHandler";
     public const string ThinkHandlerName = "AgentThinkHandler";
+    public const string CriticHandlerName = "AgentCriticHandler";
 }

@@ -168,6 +168,113 @@ public sealed class AgentThinkHandlerTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CriticOnMutating_RoutesMutatingCallToCriticStage()
+    {
+        var planner = new StaticPlanner(new AgentThinkDecision
+        {
+            Action = AgentThinkAction.CallTool,
+            ToolCall = new AgentToolCall
+            {
+                Tool = "saveBudgetResult",
+                ResultKey = "budget",
+                Params = new() { ["projectId"] = "abc" },
+            },
+            RawDecisionJson = """{"action":"call_tool","tool":"saveBudgetResult"}""",
+        });
+
+        var handler = new CapturingThinkHandler(
+            planner,
+            new StaticToolRegistry([
+                new AgentToolDefinition
+                {
+                    Name = "saveBudgetResult",
+                    Description = "Save budget",
+                    HttpMethod = "POST",
+                    UrlTemplate = "/api/projects/{projectId}/budget",
+                    IsMutating = true,
+                }
+            ]),
+            new AgentOptions { RequireConfirmationForMutations = false, MaxThinkSteps = 10 },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 120,
+            StageId = 220,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Generate budget",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+                ["agent:runOverrides"] = new AgentRunOverrides { CriticMode = AgentCriticMode.CriticOnMutating },
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(handler.LastAppendedStages);
+        Assert.Equal("AgentCriticHandler", handler.LastAppendedStages[0].StageHandlerName);
+        Assert.True(context.Payload!.ContainsKey("agent:pendingProposal"));
+
+        // History should NOT yet contain the tool_call turn — that happens on critic approve
+        var history = (List<AgentConversationTurn>)context.Payload!["agent:conversationHistory"];
+        Assert.Empty(history);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CriticOff_BypassesCriticEvenWhenMutating()
+    {
+        var planner = new StaticPlanner(new AgentThinkDecision
+        {
+            Action = AgentThinkAction.CallTool,
+            ToolCall = new AgentToolCall
+            {
+                Tool = "saveBudgetResult",
+                ResultKey = "budget",
+                Params = new() { ["projectId"] = "abc" },
+            },
+            RawDecisionJson = """{"action":"call_tool","tool":"saveBudgetResult"}""",
+        });
+
+        var handler = new CapturingThinkHandler(
+            planner,
+            new StaticToolRegistry([
+                new AgentToolDefinition
+                {
+                    Name = "saveBudgetResult",
+                    Description = "Save budget",
+                    HttpMethod = "POST",
+                    UrlTemplate = "/api/projects/{projectId}/budget",
+                    IsMutating = true,
+                }
+            ]),
+            new AgentOptions { RequireConfirmationForMutations = false, MaxThinkSteps = 10 },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 121,
+            StageId = 221,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Generate budget",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+                ["agent:runOverrides"] = new AgentRunOverrides { CriticMode = AgentCriticMode.Off },
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.LastAppendedStages.Count);
+        Assert.Equal("AgentToolHandler", handler.LastAppendedStages[0].StageHandlerName);
+        Assert.Equal("AgentThinkHandler", handler.LastAppendedStages[1].StageHandlerName);
+        Assert.False(context.Payload!.ContainsKey("agent:pendingProposal"));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenResponderAlreadyAppended_DoesNotAppendAnotherResponder()
     {
         var handler = new CapturingThinkHandler(

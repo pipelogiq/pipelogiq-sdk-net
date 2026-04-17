@@ -51,6 +51,12 @@ public class PipelogiqRunnerOptions
     public QueueProvisioningMode QueueProvisioningMode { get; set; } = QueueProvisioningMode.AssertOnly;
 
     /// <summary>
+    /// Maximum time to wait for in-flight stage handlers to complete during shutdown.
+    /// Default: 30 seconds.
+    /// </summary>
+    public TimeSpan DrainGracePeriod { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Gets or sets legacy application identifier.
     /// </summary>
     [Obsolete("AppId is server-provided from /workers/bootstrap and no longer required in runner options.")]

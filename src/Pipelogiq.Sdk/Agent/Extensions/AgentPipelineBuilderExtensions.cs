@@ -1,3 +1,4 @@
+using PipelogiqSDK.Agent.Configuration;
 using PipelogiqSDK.Agent.Models;
 using PipelogiqSDK.Builders;
 using PipelogiqSDK.Configuration;
@@ -22,13 +23,15 @@ public static class AgentPipelineBuilderExtensions
     /// <param name="sessionId">Client session ID for sending responses back.</param>
     /// <param name="userId">Optional user identifier.</param>
     /// <param name="options">Optional runner options override.</param>
+    /// <param name="runOverrides">Optional per-pipeline overrides (e.g. second-model critic config).</param>
     /// <returns>Configured pipeline builder ready to send.</returns>
     public static PipelineBuilder CreateAiAgent(
         string message,
         AgentReplyTarget? replyTo = null,
         string? sessionId = null,
         string? userId = null,
-        PipelogiqRunnerOptions? options = null)
+        PipelogiqRunnerOptions? options = null,
+        AgentRunOverrides? runOverrides = null)
     {
         var input = new AgentOrchestratorInput
         {
@@ -36,6 +39,7 @@ public static class AgentPipelineBuilderExtensions
             ReplyTo = replyTo,
             SessionId = sessionId,
             UserId = userId,
+            RunOverrides = runOverrides,
         };
 
         return CreateAiAgent(input, options);
