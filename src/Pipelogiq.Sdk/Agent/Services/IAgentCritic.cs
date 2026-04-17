@@ -17,13 +17,13 @@ public interface IAgentCritic
     /// <param name="history">Conversation turns so far (tool calls, tool results, prior think decisions).</param>
     /// <param name="proposal">The decision the think handler produced that needs reviewing.</param>
     /// <param name="tools">Available tools — lets the critic judge tool choice and parameter plausibility.</param>
-    /// <param name="overrides">Per-pipeline overrides providing the critic model, API key, and rubric.</param>
+    /// <param name="criticOptions">Worker-owned critic settings resolved at runtime.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<AgentCriticVerdict> ReviewAsync(
         string originalMessage,
         IReadOnlyList<AgentConversationTurn> history,
         AgentThinkDecision proposal,
         IReadOnlyList<AgentToolDefinition> tools,
-        AgentRunOverrides overrides,
+        AgentCriticOptions criticOptions,
         CancellationToken ct = default);
 }

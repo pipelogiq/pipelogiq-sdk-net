@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using PipelogiqSDK.Contracts;
 
@@ -5,6 +6,11 @@ namespace PipelogiqSDK.Execution;
 
 internal static class PayloadConverter
 {
+    private static readonly JsonSerializerOptions SerializeOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     public static Dictionary<string, object> FromContextItems(IEnumerable<ContextItem> contextItems)
     {
         var payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
@@ -35,7 +41,7 @@ internal static class PayloadConverter
             contextItems.Add(new ContextItem
             {
                 Key = key,
-                Value = JsonSerializer.Serialize(value, valueType),
+                Value = JsonSerializer.Serialize(value, valueType, SerializeOptions),
                 ValueType = valueTypeName
             });
         }

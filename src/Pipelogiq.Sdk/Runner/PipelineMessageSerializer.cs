@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace PipelogiqSDK.Runner;
@@ -14,7 +15,8 @@ internal static class PipelineMessageSerializer
 
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     public static T? Deserialize<T>(string payload)

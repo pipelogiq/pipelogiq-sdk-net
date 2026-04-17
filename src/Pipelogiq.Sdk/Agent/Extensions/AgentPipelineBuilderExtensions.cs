@@ -23,7 +23,7 @@ public static class AgentPipelineBuilderExtensions
     /// <param name="sessionId">Client session ID for sending responses back.</param>
     /// <param name="userId">Optional user identifier.</param>
     /// <param name="options">Optional runner options override.</param>
-    /// <param name="runOverrides">Optional per-pipeline overrides (e.g. second-model critic config).</param>
+    /// <param name="runOverrides">Optional per-pipeline overrides (for example critic mode).</param>
     /// <returns>Configured pipeline builder ready to send.</returns>
     public static PipelineBuilder CreateAiAgent(
         string message,

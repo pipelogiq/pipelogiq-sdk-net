@@ -14,11 +14,12 @@ namespace PipelogiqSDK.Agent.Handlers;
 /// Reviews the think handler's pending proposal with a second-model critic.
 /// On approve: schedules the originally-planned follow-up stages (tool, confirmation, or responder).
 /// On reject: appends a critic_feedback turn to history and loops back to think for another attempt,
-/// up to <see cref="AgentRunOverrides.MaxRejectionsPerStep"/> rejections per single proposal.
+/// up to <see cref="AgentCriticOptions.MaxRejectionsPerStep"/> rejections per single proposal.
 /// </summary>
 public class AgentCriticHandler(
     IAgentCriticResolver criticResolver,
     IAgentToolRegistry toolRegistry,
+    AgentOptions agentOptions,
     PipelogiqApiClient apiClient) : IStageHandler
 {
     private const int RateLimitRetryIntervalSeconds = 120;
@@ -38,19 +39,20 @@ public class AgentCriticHandler(
             return StageResult.Success("No pending proposal — think re-scheduled.");
         }
 
-        var overrides = context.TryGetValue<AgentRunOverrides>(AgentConstants.RunOverrides) ?? new AgentRunOverrides();
+        var criticMode = AgentCriticRuntime.ResolveMode(context, agentOptions);
+        var criticSettings = agentOptions.Critic;
         var history = context.TryGetValue<List<AgentConversationTurn>>(AgentConstants.ConversationHistory) ?? new();
         var originalMessage = context.TryGetValue<string>(AgentConstants.OriginalMessage) ?? string.Empty;
         var tools = toolRegistry.GetAll();
         var rejectionCount = context.TryGetValue<int>(AgentConstants.CriticRejectionCount);
 
         context.LogInfo(
-            $"Critic review started [provider={overrides.CriticProvider}, model={overrides.CriticModel ?? "default"}, action={proposal.Action}, tool={proposal.ToolCall?.Tool ?? "-"}, rejectionsSoFar={rejectionCount}]");
+            $"Critic review started [mode={criticMode}, provider={criticSettings.Provider}, model={criticSettings.Model ?? "default"}, action={proposal.Action}, tool={proposal.ToolCall?.Tool ?? "-"}, rejectionsSoFar={rejectionCount}]");
 
         IAgentCritic critic;
         try
         {
-            critic = criticResolver.Resolve(overrides.CriticProvider);
+            critic = criticResolver.Resolve(criticSettings.Provider);
         }
         catch (NotSupportedException ex)
         {
@@ -61,7 +63,7 @@ public class AgentCriticHandler(
         AgentCriticVerdict verdict;
         try
         {
-            verdict = await critic.ReviewAsync(originalMessage, history, proposal, tools, overrides);
+            verdict = await critic.ReviewAsync(originalMessage, history, proposal, tools, criticSettings);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
         {
@@ -83,10 +85,10 @@ public class AgentCriticHandler(
             return await ApproveAndScheduleAsync(pipelineId, proposal, context);
 
         var nextRejectionCount = rejectionCount + 1;
-        if (nextRejectionCount > overrides.MaxRejectionsPerStep)
+        if (nextRejectionCount > criticSettings.MaxRejectionsPerStep)
         {
             context.LogWarning(
-                $"Critic rejection cap reached [cap={overrides.MaxRejectionsPerStep}] — approving proposal to make forward progress.");
+                $"Critic rejection cap reached [cap={criticSettings.MaxRejectionsPerStep}] — approving proposal to make forward progress.");
             return await ApproveAndScheduleAsync(pipelineId, proposal, context);
         }
 

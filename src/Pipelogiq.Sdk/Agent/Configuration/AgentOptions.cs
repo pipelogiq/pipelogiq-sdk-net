@@ -110,6 +110,13 @@ public class AgentOptions
     /// </summary>
     public AgentProgressOptions Progress { get; set; } = new();
 
+    /// <summary>
+    /// Critic configuration owned by the worker/runtime. Per-pipeline runs may override
+    /// only <see cref="AgentCriticOptions.Mode"/> through <see cref="AgentRunOverrides"/>.
+    /// Secrets and provider settings live here and stay out of pipeline context.
+    /// </summary>
+    public AgentCriticOptions Critic { get; set; } = new();
+
     /// <summary>Registered tool definitions (populated via AddTool / AddNativeTool).</summary>
     internal List<AgentToolDefinition> Tools { get; } = new();
 
@@ -120,6 +127,47 @@ public class AgentOptions
     /// </summary>
     internal Dictionary<string, Services.IAgentToolHandler> NativeHandlers { get; } =
         new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Worker-owned configuration for the second-model critic.
+/// </summary>
+public class AgentCriticOptions
+{
+    /// <summary>
+    /// Default critic mode for agent runs when no per-pipeline override is supplied.
+    /// </summary>
+    public AgentCriticMode Mode { get; set; } = AgentCriticMode.Off;
+
+    /// <summary>
+    /// LLM provider used for the critic. Defaults to OpenAI.
+    /// </summary>
+    public AgentLlmProvider Provider { get; set; } = AgentLlmProvider.OpenAI;
+
+    /// <summary>
+    /// Model identifier for the critic, e.g. "gpt-4.1" or "claude-sonnet-4-6".
+    /// </summary>
+    public string? Model { get; set; }
+
+    /// <summary>
+    /// API key for the critic provider when required.
+    /// </summary>
+    public string? ApiKey { get; set; }
+
+    /// <summary>
+    /// Optional base URL override for the critic provider.
+    /// </summary>
+    public string? ApiBaseUrl { get; set; }
+
+    /// <summary>
+    /// Domain-specific rubric injected into the critic's system prompt.
+    /// </summary>
+    public string? Rubric { get; set; }
+
+    /// <summary>
+    /// Maximum number of critic rejections permitted per single think decision.
+    /// </summary>
+    public int MaxRejectionsPerStep { get; set; } = 2;
 }
 
 /// <summary>

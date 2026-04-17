@@ -1,4 +1,5 @@
 using PipelogiqSDK.Abstractions;
+using PipelogiqSDK.Agent;
 using PipelogiqSDK.Agent.Configuration;
 using PipelogiqSDK.Agent.Handlers;
 using PipelogiqSDK.Agent.Models;
@@ -206,7 +207,7 @@ public sealed class AgentThinkHandlerTests
                 ["agent:originalMessage"] = "Generate budget",
                 ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
                 ["agent:thinkStepCount"] = 0,
-                ["agent:runOverrides"] = new AgentRunOverrides { CriticMode = AgentCriticMode.CriticOnMutating },
+                [AgentConstants.CriticMode] = AgentCriticMode.CriticOnMutating,
             }
         };
 
@@ -261,7 +262,7 @@ public sealed class AgentThinkHandlerTests
                 ["agent:originalMessage"] = "Generate budget",
                 ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
                 ["agent:thinkStepCount"] = 0,
-                ["agent:runOverrides"] = new AgentRunOverrides { CriticMode = AgentCriticMode.Off },
+                [AgentConstants.CriticMode] = AgentCriticMode.Off,
             }
         };
 

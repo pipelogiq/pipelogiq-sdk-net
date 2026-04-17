@@ -106,7 +106,6 @@ public sealed class AgentCriticHandlerTests
             overrides: new AgentRunOverrides
             {
                 CriticMode = AgentCriticMode.CriticOnMutating,
-                MaxRejectionsPerStep = 2,
             });
 
         var result = await handler.ExecuteAsync(context);
@@ -141,7 +140,8 @@ public sealed class AgentCriticHandlerTests
         var handler = BuildHandler(
             AgentCriticDecision.Reject,
             feedback: "Still missing lineItems.",
-            tools: [BudgetTool()]);
+            tools: [BudgetTool()],
+            maxRejectionsPerStep: 1);
 
         var context = BuildContext(
             pipelineId: 504,
@@ -149,7 +149,6 @@ public sealed class AgentCriticHandlerTests
             overrides: new AgentRunOverrides
             {
                 CriticMode = AgentCriticMode.CriticOnMutating,
-                MaxRejectionsPerStep = 1,
             });
         // Simulate we already rejected once — this is now the second rejection (== cap)
         context.Payload![AgentConstants.CriticRejectionCount] = 1;
@@ -210,7 +209,8 @@ public sealed class AgentCriticHandlerTests
         string? feedback,
         IReadOnlyList<AgentToolDefinition> tools,
         List<string>? concerns = null,
-        Exception? throwOnReview = null)
+        Exception? throwOnReview = null,
+        int maxRejectionsPerStep = 2)
     {
         var verdict = new AgentCriticVerdict
         {
@@ -222,7 +222,22 @@ public sealed class AgentCriticHandlerTests
         var critic = new StubCritic(verdict, throwOnReview);
         var resolver = new StubResolver(critic);
         var registry = new StaticToolRegistry(tools);
-        return new CapturingCriticHandler(resolver, registry, new PipelogiqApiClient("http://localhost:8081", "test"));
+        return new CapturingCriticHandler(
+            resolver,
+            registry,
+            new AgentOptions
+            {
+                Critic = new AgentCriticOptions
+                {
+                    Mode = AgentCriticMode.Off,
+                    Provider = AgentLlmProvider.OpenAI,
+                    Model = "gpt-4.1",
+                    ApiKey = "test-key",
+                    MaxRejectionsPerStep = maxRejectionsPerStep,
+                    Rubric = "Budget checklist",
+                }
+            },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
     }
 
     private static StageContext BuildContext(int pipelineId, AgentThinkDecision proposal, AgentRunOverrides overrides) => new()
@@ -234,15 +249,16 @@ public sealed class AgentCriticHandlerTests
             [AgentConstants.OriginalMessage] = "Generate budget for project abc",
             [AgentConstants.ConversationHistory] = new List<AgentConversationTurn>(),
             [AgentConstants.PendingProposal] = proposal,
-            [AgentConstants.RunOverrides] = overrides,
+            [AgentConstants.CriticMode] = overrides.CriticMode,
         }
     };
 
     private sealed class CapturingCriticHandler(
         IAgentCriticResolver resolver,
         IAgentToolRegistry toolRegistry,
+        AgentOptions agentOptions,
         PipelogiqApiClient apiClient)
-        : AgentCriticHandler(resolver, toolRegistry, apiClient)
+        : AgentCriticHandler(resolver, toolRegistry, agentOptions, apiClient)
     {
         public List<StageInfo> LastAppendedStages { get; private set; } = new();
 
@@ -260,7 +276,7 @@ public sealed class AgentCriticHandlerTests
             IReadOnlyList<AgentConversationTurn> history,
             AgentThinkDecision proposal,
             IReadOnlyList<AgentToolDefinition> tools,
-            AgentRunOverrides overrides,
+            AgentCriticOptions criticOptions,
             CancellationToken ct = default)
         {
             if (throwOnReview != null)

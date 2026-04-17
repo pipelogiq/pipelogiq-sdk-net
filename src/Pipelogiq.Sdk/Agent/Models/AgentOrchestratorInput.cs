@@ -23,8 +23,9 @@ public class AgentOrchestratorInput
     public List<AgentAttachment>? Attachments { get; set; }
 
     /// <summary>
-    /// Per-pipeline overrides (e.g. second-model critic config). When null, the agent
-    /// runs with the global <see cref="AgentOptions"/> defaults and no critic.
+    /// Per-pipeline overrides. This is intentionally limited to non-sensitive switches
+    /// such as critic mode; provider credentials and rubric stay in the worker's
+    /// global <see cref="AgentOptions"/>.
     /// </summary>
     public AgentRunOverrides? RunOverrides { get; set; }
 }

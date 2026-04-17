@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.5] - 2026-04-17
+
+### Added
+
+- **Second-model critic** — new `AgentCriticHandler` stage that reviews the think handler's proposed action with a separate LLM before execution. Supports three modes: `CriticOnFinal` (review only the terminal Done decision), `CriticOnMutating` (review mutating tool calls and Done), and `CriticOnEveryStep` (review every think decision). Configurable per-pipeline via `AgentRunOverrides`
+- **OpenAI and Claude critic implementations** — `OpenAiCritic` and `ClaudeCritic` build structured review prompts with domain-specific rubrics and parse approve/reject verdicts with confidence scores and concerns
+- **Critic resolver** — `AgentCriticResolver` selects the appropriate critic implementation based on `AgentLlmProvider` (OpenAI, Anthropic, or custom)
+- **Per-pipeline critic overrides** — `AgentRunOverrides` allows configuring critic mode, provider, model, API key, rubric, and rejection cap without changing global `AgentOptions`
+- **Critic rejection loop** — rejected proposals append structured feedback to conversation history and loop back to think, up to `MaxRejectionsPerStep` (default: 2) rejections per decision
+- **Graceful worker shutdown** — `PipelineRunner` now cancels RabbitMQ consumers on SIGTERM without closing channels, then drains in-flight jobs with a configurable `DrainGracePeriod` (default: 30s) before disposing messaging resources
+- **Drain-safe publish tokens** — critical publish operations (`SetStatusToRunning`, result publishing) now use independent `CancellationTokenSource` with 10s timeout instead of the parent `stoppingToken`, ensuring in-flight handlers can complete their work after shutdown signal
+
+### Changed
+
+- **Shutdown flow refactored** — shutdown is now phased: (1) cancel consumers to stop new message delivery, (2) drain in-flight jobs, (3) dispose channels. The `Draining` state is set in the outer `finally` block after the main loop exits
+
+### Fixed
+
+- **Unicode escapes in pipeline context** — `PayloadConverter` and `PipelineMessageSerializer` now use `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` instead of the default encoder. Context values containing non-ASCII characters (Cyrillic, CJK, etc.) and nested JSON strings are now stored as readable UTF-8 text instead of `\uXXXX` escape sequences
+
 ## [0.3.0-preview.3] - 2026-04-12
 
 ### Added
@@ -94,7 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.3...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.5...HEAD
+[0.3.0-preview.5]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.5
 [0.3.0-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.3
 [0.3.0-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.2
 [0.3.0-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.1

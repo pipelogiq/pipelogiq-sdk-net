@@ -38,16 +38,16 @@ public class OpenAiCritic(IHttpClientFactory httpClientFactory) : IAgentCritic
         IReadOnlyList<AgentConversationTurn> history,
         AgentThinkDecision proposal,
         IReadOnlyList<AgentToolDefinition> tools,
-        AgentRunOverrides overrides,
+        AgentCriticOptions criticOptions,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(overrides.CriticApiKey))
-            throw new InvalidOperationException("AgentRunOverrides.CriticApiKey is required for the OpenAI critic.");
+        if (string.IsNullOrWhiteSpace(criticOptions.ApiKey))
+            throw new InvalidOperationException("AgentOptions.Critic.ApiKey is required for the OpenAI critic.");
 
-        var systemPrompt = AgentCriticBase.DefaultSystemPrompt + AgentCriticBase.BuildRubricBlock(overrides.CriticRubric);
+        var systemPrompt = AgentCriticBase.DefaultSystemPrompt + AgentCriticBase.BuildRubricBlock(criticOptions.Rubric);
         var userPrompt = AgentCriticBase.BuildReviewUserMessage(originalMessage, history, proposal, tools);
-        var model = string.IsNullOrWhiteSpace(overrides.CriticModel) ? DefaultModel : overrides.CriticModel!;
-        var baseUrl = string.IsNullOrWhiteSpace(overrides.CriticApiBaseUrl) ? DefaultBaseUrl : overrides.CriticApiBaseUrl!;
+        var model = string.IsNullOrWhiteSpace(criticOptions.Model) ? DefaultModel : criticOptions.Model!;
+        var baseUrl = string.IsNullOrWhiteSpace(criticOptions.ApiBaseUrl) ? DefaultBaseUrl : criticOptions.ApiBaseUrl!;
 
         var requestBody = new Dictionary<string, object?>
         {
@@ -63,7 +63,7 @@ public class OpenAiCritic(IHttpClientFactory httpClientFactory) : IAgentCritic
 
         var http = httpClientFactory.CreateClient("pipelogiq-agent-llm");
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/v1/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", overrides.CriticApiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", criticOptions.ApiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(requestBody, JsonOptions), Encoding.UTF8, "application/json");
 
         using var response = await http.SendAsync(request, ct);

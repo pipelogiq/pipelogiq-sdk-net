@@ -216,8 +216,8 @@ public class AgentThinkHandler(
 
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
-        var overrides = context.TryGetValue<AgentRunOverrides>(AgentConstants.RunOverrides);
-        if (overrides != null && ShouldRouteToCritic(decision, overrides))
+        var criticMode = AgentCriticRuntime.ResolveMode(context, agentOptions);
+        if (ShouldRouteToCritic(decision, criticMode))
             return await RouteToCriticAsync(pipelineId, decision, context);
 
         return decision.Action switch
@@ -232,12 +232,12 @@ public class AgentThinkHandler(
         };
     }
 
-    private bool ShouldRouteToCritic(AgentThinkDecision decision, AgentRunOverrides overrides)
+    private bool ShouldRouteToCritic(AgentThinkDecision decision, AgentCriticMode criticMode)
     {
-        if (overrides.CriticMode == AgentCriticMode.Off)
+        if (criticMode == AgentCriticMode.Off)
             return false;
 
-        return overrides.CriticMode switch
+        return criticMode switch
         {
             AgentCriticMode.CriticOnEveryStep => true,
             AgentCriticMode.CriticOnFinal => decision.Action == AgentThinkAction.Done,

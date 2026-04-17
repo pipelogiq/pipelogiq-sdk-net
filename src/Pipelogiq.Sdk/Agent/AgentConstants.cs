@@ -22,7 +22,7 @@ internal static class AgentConstants
     public const string ThinkStepCount = "agent:thinkStepCount";
 
     // Critic loop context keys
-    public const string RunOverrides = "agent:runOverrides";
+    public const string CriticMode = "agent:criticMode";
     public const string PendingProposal = "agent:pendingProposal";
     public const string CriticRejectionCount = "agent:criticRejectionCount";
     public const string LastCriticFeedback = "agent:lastCriticFeedback";

@@ -39,9 +39,9 @@ public class AgentOrchestratorHandler(
             SetContextValue(context, AgentConstants.Attachments, input.Attachments);
         if (input.RunOverrides != null)
         {
-            SetContextValue(context, AgentConstants.RunOverrides, input.RunOverrides);
+            SetContextValue(context, AgentConstants.CriticMode, input.RunOverrides.CriticMode);
             context.LogInfo(
-                $"Per-pipeline overrides applied [criticMode={input.RunOverrides.CriticMode}, criticProvider={input.RunOverrides.CriticProvider}, criticModel={input.RunOverrides.CriticModel ?? "default"}]");
+                $"Per-pipeline overrides applied [criticMode={input.RunOverrides.CriticMode}]");
         }
         context.LogInfo(
             $"Agent orchestrator started [reactMode={agentOptions.UseReActMode}, requireConfirmation={agentOptions.RequireConfirmationForMutations}, message={input.Message.ToLogPreview(800)}]");
