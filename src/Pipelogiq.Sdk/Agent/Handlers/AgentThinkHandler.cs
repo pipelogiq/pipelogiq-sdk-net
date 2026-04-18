@@ -174,13 +174,6 @@ public class AgentThinkHandler(
         {
             context.LogInfo(
                 $"Think selected tool [tool={decision.ToolCall.Tool}, resultKey={decision.ToolCall.EffectiveResultKey}, paramKeys={string.Join(",", decision.ToolCall.Params.Keys.OrderBy(x => x))}]");
-
-            if (string.Equals(decision.ToolCall.Tool, "saveBudgetResult", StringComparison.OrdinalIgnoreCase) &&
-                !HasExplicitBudgetRows(decision.ToolCall.Params))
-            {
-                context.LogWarning(
-                    $"Think selected saveBudgetResult without explicit rows [sessionId={sessionId ?? "-"}, step={stepCount}, params={decision.ToolCall.Params.ToLogPreview(800)}]");
-            }
         }
 
         if (decision.Action == AgentThinkAction.CallTool &&
@@ -658,28 +651,6 @@ public class AgentThinkHandler(
             return "-";
 
         return string.Join(">", history.Select(x => x.Type).TakeLast(8));
-    }
-
-    private static bool HasExplicitBudgetRows(IReadOnlyDictionary<string, object?> parameters)
-    {
-        foreach (var alias in new[] { "lineItems", "items", "budgetRows", "rows" })
-        {
-            if (!parameters.TryGetValue(alias, out var value) || value == null)
-                continue;
-
-            if (value is string raw && !string.IsNullOrWhiteSpace(raw) && raw.TrimStart().StartsWith("[", StringComparison.Ordinal))
-                return true;
-
-            if (value is IEnumerable<object> enumerable && enumerable.Cast<object?>().Any())
-                return true;
-
-            if (value is JsonElement json &&
-                (json.ValueKind == JsonValueKind.Array && json.GetArrayLength() > 0 ||
-                 json.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(json.GetString())))
-                return true;
-        }
-
-        return false;
     }
 
     // ── Memory recall + context injection ────────────────────────────────────

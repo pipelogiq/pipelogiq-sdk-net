@@ -575,15 +575,8 @@ Response body:
         // (including the original user message) is already inside the history —
         // this happens when session history from a previous pipeline was loaded.
         // In a fresh pipeline the history has no user_message turns, so we
-        // prepend the current message as the opening user turn.
+        // append the current message as the newest user turn after the prior history.
         bool sessionHistoryLoaded = history.Count > 0 && history[0].Type == "user_message";
-        if (!sessionHistoryLoaded)
-        {
-            if (attachments?.Count > 0)
-                messages.Add(BuildUserMessageWithAttachments(originalMessage, attachments));
-            else
-                messages.Add(new { role = "user", content = originalMessage });
-        }
 
         foreach (var turn in history)
         {
@@ -628,6 +621,14 @@ Response body:
 
                 // "reasoning" turns are already embedded in the JSON decisions — skip them
             }
+        }
+
+        if (!sessionHistoryLoaded)
+        {
+            if (attachments?.Count > 0)
+                messages.Add(BuildUserMessageWithAttachments(originalMessage, attachments));
+            else
+                messages.Add(new { role = "user", content = originalMessage });
         }
 
         return messages;
