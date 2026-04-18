@@ -267,6 +267,116 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
     }
 
     [Fact]
+    public async Task ThinkAsync_WhenAnthropicToolHasArrayItemProperties_EmitsNestedItemSchema()
+    {
+        var recordingHandler = new RecordingClaudeHandler(HttpStatusCode.OK, """
+            {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"action\":\"done\",\"answer\":\"ok\"}"
+                }
+              ]
+            }
+            """);
+        var planner = new ClaudeLlmPlanner(
+            new AgentOptions
+            {
+                LlmProvider = AgentLlmProvider.Anthropic,
+                LlmApiKey = "test-key",
+                LlmModel = "claude-sonnet-4-5",
+                LlmApiBaseUrl = "https://api.anthropic.com",
+                AnthropicMaxTokens = 2048,
+            },
+            new StaticHttpClientFactory(new HttpClient(recordingHandler)));
+
+        await planner.ThinkAsync(
+            originalMessage: "Save the section budget",
+            history: [],
+            tools:
+            [
+                new AgentToolDefinition
+                {
+                    Name = "saveBudgetResult",
+                    Description = "Persist the generated budget sheet",
+                    HttpMethod = "POST",
+                    UrlTemplate = "/budget",
+                    Params = new Dictionary<string, AgentToolParam>
+                    {
+                        ["projectId"] = new()
+                        {
+                            In = "body",
+                            Type = "string",
+                            Required = true,
+                            Description = "Project ID"
+                        },
+                        ["lineItems"] = new()
+                        {
+                            In = "body",
+                            Type = "array",
+                            Required = true,
+                            Description = "Budget rows",
+                            ItemsDescription = "Budget row object",
+                            ItemsProperties = new Dictionary<string, AgentToolParam>
+                            {
+                                ["no"] = new()
+                                {
+                                    In = "body",
+                                    Type = "string",
+                                    Required = true,
+                                    Description = "Hierarchy number"
+                                },
+                                ["description"] = new()
+                                {
+                                    In = "body",
+                                    Type = "string",
+                                    Required = true,
+                                    Description = "Row description"
+                                },
+                                ["sourceWorkItemIds"] = new()
+                                {
+                                    In = "body",
+                                    Type = "array",
+                                    Required = false,
+                                    Description = "Source work item IDs",
+                                    ItemsType = "string",
+                                    ItemsDescription = "Work item UUID"
+                                }
+                            }
+                        }
+                    }
+                }
+            ],
+            requireConfirmationForMutations: true,
+            systemPrompt: "You are a budget assistant.");
+
+        Assert.NotNull(recordingHandler.LastRequestBody);
+
+        using var request = JsonDocument.Parse(recordingHandler.LastRequestBody!);
+        var tool = request.RootElement.GetProperty("tools").EnumerateArray().Single();
+        var lineItems = tool.GetProperty("input_schema")
+            .GetProperty("properties")
+            .GetProperty("lineItems");
+
+        Assert.Equal("array", lineItems.GetProperty("type").GetString());
+        var items = lineItems.GetProperty("items");
+        Assert.Equal("object", items.GetProperty("type").GetString());
+        Assert.Equal("Budget row object", items.GetProperty("description").GetString());
+
+        var itemProperties = items.GetProperty("properties");
+        Assert.Equal("string", itemProperties.GetProperty("no").GetProperty("type").GetString());
+        Assert.Equal("string", itemProperties.GetProperty("description").GetProperty("type").GetString());
+
+        var sourceWorkItemIds = itemProperties.GetProperty("sourceWorkItemIds");
+        Assert.Equal("array", sourceWorkItemIds.GetProperty("type").GetString());
+        Assert.Equal("string", sourceWorkItemIds.GetProperty("items").GetProperty("type").GetString());
+
+        var required = items.GetProperty("required").EnumerateArray().Select(x => x.GetString()).ToArray();
+        Assert.Contains("no", required);
+        Assert.Contains("description", required);
+    }
+
+    [Fact]
     public async Task PlanAsync_WhenUsingOllama_UsesMinimalSystemPromptAndRawUserMessage()
     {
         var recordingHandler = new RecordingClaudeHandler(HttpStatusCode.OK, """

@@ -13,12 +13,13 @@ public static class StageResult
     /// </summary>
     /// <param name="result">Result message.</param>
     /// <returns>Successful stage result.</returns>
-    public static StageResultDto Success(string result)
+    public static StageResultDto Success(string result, IEnumerable<StageInfo>? appendedStages = null)
     {
         return new StageResultDto
         {
             Result = result,
-            IsSuccess = true
+            IsSuccess = true,
+            AppendedStages = appendedStages?.ToList()
         };
     }
 
@@ -28,13 +29,17 @@ public static class StageResult
     /// <param name="result">Result message.</param>
     /// <param name="errorCode">Optional error code used by retry policies to decide whether to retry.</param>
     /// <returns>Failed stage result.</returns>
-    public static StageResultDto Error(string result, string? errorCode = null)
+    public static StageResultDto Error(
+        string result,
+        string? errorCode = null,
+        IEnumerable<StageInfo>? appendedStages = null)
     {
         return new StageResultDto
         {
             Result = result,
             IsSuccess = false,
-            ErrorCode = errorCode
+            ErrorCode = errorCode,
+            AppendedStages = appendedStages?.ToList()
         };
     }
 

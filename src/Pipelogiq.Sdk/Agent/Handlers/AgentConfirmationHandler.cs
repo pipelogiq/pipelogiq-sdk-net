@@ -42,6 +42,15 @@ public class AgentConfirmationHandler(IAgentNotificationRouter? notificationRout
 
             // Plan-and-execute mode: jump directly to responder stage (already exists)
             var responderStageId = context.TryGetValue<int?>(AgentConstants.ResponderStageId);
+            if (!responderStageId.HasValue)
+            {
+                var appendedStageIds = context.TryGetValue<Dictionary<string, int>>(AgentConstants.AppendedStageIds);
+                if (appendedStageIds != null &&
+                    appendedStageIds.TryGetValue("agent:responder", out var mappedResponderStageId))
+                {
+                    responderStageId = mappedResponderStageId;
+                }
+            }
             if (responderStageId.HasValue)
             {
                 return new StageResultDto

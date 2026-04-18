@@ -84,6 +84,12 @@ public interface IStageResult
     /// Gets or sets context items produced by the stage.
     /// </summary>
     List<Contracts.ContextItem>? ContextItems { get; set; }
+
+    /// <summary>
+    /// Gets or sets follow-up stages that should be appended to the pipeline
+    /// transactionally together with this stage result.
+    /// </summary>
+    List<Contracts.StageInfo>? AppendedStages { get; set; }
 }
 
 /// <summary>

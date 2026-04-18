@@ -52,22 +52,18 @@ public class AgentOrchestratorHandler(
             SetContextValue(context, AgentConstants.ConversationHistory, new List<AgentConversationTurn>());
             SetContextValue(context, AgentConstants.ThinkStepCount, 0);
 
-            var thinkRequest = new AppendStagesRequest
+            var reactStages = new List<StageInfo>
             {
-                Stages =
-                [
-                    new StageInfo
-                    {
-                        StageName = "agent:think",
-                        StageHandlerName = AgentConstants.ThinkHandlerName,
-                        Options = BuildRateLimitRetryOptions(),
-                    }
-                ]
+                new()
+                {
+                    StageName = "agent:think",
+                    StageHandlerName = AgentConstants.ThinkHandlerName,
+                    Options = BuildRateLimitRetryOptions(),
+                }
             };
-            await apiClient.AppendAgentStagesAsync(pipelineId, thinkRequest);
-            context.LogInfo("ReAct mode enabled. Initial think stage appended.");
+            context.LogInfo("ReAct mode enabled. Initial think stage prepared in stage result.");
 
-            return StageResult.Success("ReAct mode: think stage appended. Loop begins.");
+            return StageResult.Success("ReAct mode: think stage appended. Loop begins.", reactStages);
         }
 
         // Plan-and-execute mode: LLM plans all tool calls upfront
@@ -90,8 +86,8 @@ public class AgentOrchestratorHandler(
                 SetContextValue(context, "agent:directAnswer", plan.DirectAnswer);
             context.LogInfo("Planner returned direct answer. Appending responder only.");
 
-            await AppendStagesAsync(pipelineId, new List<AgentToolCall>(), context, ct: default);
-            return StageResult.Success("No tools needed; responder appended.");
+            var responderStages = await AppendStagesAsync(pipelineId, new List<AgentToolCall>(), context, ct: default);
+            return StageResult.Success("No tools needed; responder appended.", responderStages);
         }
 
         var readOnlyCalls = plan.ToolCalls.Where(c => !IsToolMutating(c.Tool)).ToList();
@@ -99,9 +95,11 @@ public class AgentOrchestratorHandler(
         context.LogInfo(
             $"Planner produced tool plan [total={plan.ToolCalls.Count}, readOnly={readOnlyCalls.Count}, mutating={mutatingCalls.Count}]");
 
-        await AppendStagesAsync(pipelineId, readOnlyCalls, mutatingCalls, context, ct: default);
+        var plannedStages = await AppendStagesAsync(pipelineId, readOnlyCalls, mutatingCalls, context, ct: default);
 
-        return StageResult.Success($"Agent plan built: {plan.ToolCalls.Count} tool call(s) appended as stages.");
+        return StageResult.Success(
+            $"Agent plan built: {plan.ToolCalls.Count} tool call(s) appended as stages.",
+            plannedStages);
     }
 
     private bool IsToolMutating(string toolName)
@@ -110,7 +108,7 @@ public class AgentOrchestratorHandler(
         return def?.IsEffectivelyMutating ?? false;
     }
 
-    private async Task AppendStagesAsync(
+    protected virtual Task<List<StageInfo>> AppendStagesAsync(
         int pipelineId,
         List<AgentToolCall> readOnlyCalls,
         List<AgentToolCall> mutatingCalls,
@@ -136,22 +134,16 @@ public class AgentOrchestratorHandler(
         // Always add responder last
         stages.Add(BuildResponderStage());
 
-        var request = new AppendStagesRequest { Stages = stages };
-        var response = await apiClient.AppendAgentStagesAsync(pipelineId, request, ct);
-
-        // Store responder stage ID in context so confirmation handler can jump to it on rejection
-        var responderStage = response.Stages.LastOrDefault();
-        if (responderStage != null)
-            SetContextValue(context, AgentConstants.ResponderStageId, responderStage.Id);
+        return Task.FromResult(stages);
     }
 
-    private async Task AppendStagesAsync(
+    protected virtual Task<List<StageInfo>> AppendStagesAsync(
         int pipelineId,
         List<AgentToolCall> allCalls,
         IStageContext context,
         CancellationToken ct)
     {
-        await AppendStagesAsync(pipelineId, allCalls, new List<AgentToolCall>(), context, ct);
+        return AppendStagesAsync(pipelineId, allCalls, new List<AgentToolCall>(), context, ct);
     }
 
     private static StageInfo BuildToolStage(AgentToolCall call)

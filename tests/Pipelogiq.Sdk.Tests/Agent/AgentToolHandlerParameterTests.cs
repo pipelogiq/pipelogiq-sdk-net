@@ -92,6 +92,59 @@ public sealed class AgentToolHandlerParameterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithJsonElementStringifiedArray_PreservesNestedObjectsInRequestBody()
+    {
+        var tool = new AgentToolDefinition
+        {
+            Name = "saveBudgetResult",
+            Description = "Persists budget rows.",
+            HttpMethod = "POST",
+            UrlTemplate = "/api/budget",
+            Params = new Dictionary<string, AgentToolParam>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["projectId"] = new() { In = "body", Type = "string", Required = true, Description = "Project id." },
+                ["lineItems"] = new() { In = "body", Type = "array", Required = true, Description = "Budget rows." },
+            }
+        };
+
+        var requestRecorder = new RecordingHttpMessageHandler();
+        var handler = new AgentToolHandler(
+            new StaticToolRegistry([tool]),
+            new AgentOptions { TargetApiBaseUrl = "https://api.example.com" },
+            new StaticHttpClientFactory(new HttpClient(requestRecorder)
+            {
+                BaseAddress = new Uri("https://api.example.com/")
+            }));
+
+        using var payload = JsonDocument.Parse("""
+        {
+          "projectId": "project-1",
+          "lineItems": "[{\"no\":\"1\",\"description\":\"Docking\",\"type\":\"item\",\"amountExpected\":200}]"
+        }
+        """);
+
+        var result = await handler.ExecuteAsync(new AgentToolCallInput
+        {
+            ToolName = "saveBudgetResult",
+            ResultKey = "saveBudgetResult",
+            Params = new Dictionary<string, object?>
+            {
+                ["projectId"] = payload.RootElement.GetProperty("projectId").Clone(),
+                ["lineItems"] = payload.RootElement.GetProperty("lineItems").Clone(),
+            }
+        }, new StageContext());
+
+        Assert.True(result.IsSuccess);
+        using var body = JsonDocument.Parse(Assert.IsType<string>(requestRecorder.LastBody));
+        var lineItems = body.RootElement.GetProperty("lineItems");
+        Assert.Equal(JsonValueKind.Array, lineItems.ValueKind);
+        Assert.Single(lineItems.EnumerateArray());
+        var firstRow = lineItems[0];
+        Assert.Equal("Docking", firstRow.GetProperty("description").GetString());
+        Assert.Equal(200, firstRow.GetProperty("amountExpected").GetInt32());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithMissingOrUnknownParams_ThrowsValidationError()
     {
         var tool = new AgentToolDefinition

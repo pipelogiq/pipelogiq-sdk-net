@@ -10,6 +10,7 @@ internal static class AgentConstants
     public const string ToolResults = "agent:toolResults";
     public const string ResponderStageId = "agent:responderStageId";
     public const string ResponderAppended = "agent:responderAppended";
+    public const string AppendedStageIds = "pipelogiq:appendedStageIds";
     public const string ApprovalDecision = "agent:approved";
     public const string RejectionReason = "agent:rejectionReason";
     public const string ApprovedMutations = "agent:approvedMutations";

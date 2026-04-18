@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1-preview.3] - 2026-04-18
+
+### Changed
+
+- Release metadata, README status badges, and package version references now point to `0.3.1-preview.3`, the next available prerelease after `0.3.1-preview.2` was already published to NuGet.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.1-preview.3` for this branch state.
+
+## [0.3.1-preview.2] - 2026-04-18
+
+### Added
+
+- `PipelineRunner` now calls `GET /pipelines/{pipelineId}` when needed to verify current stage state before processing redelivered work, allowing retry deduplication without re-running already terminal stages.
+
+### Changed
+
+- RabbitMQ transport now enables automatic connection and topology recovery, with a short recovery interval and heartbeat defaults suitable for long-running workers.
+- Built-in agent think/critic handlers now skip duplicate retry executions when later `agent:*` follow-up stages already exist in the same pipeline.
+
+### Fixed
+
+- Redelivered StageNext messages no longer re-execute stages that are already `Completed`, `Failed`, or `Skipped`.
+- Retry loops around appended agent stages are now much less likely to create duplicate follow-up work after broker reconnects or orphan recovery.
+
+## [0.3.1-preview.1] - 2026-04-18
+
+### Added
+
+- `IStageResult.AppendedStages` and matching transport DTO support so handlers can return follow-up stages directly in their stage result payload.
+
+### Changed
+
+- Built-in agent handlers now schedule follow-up stages through `stage_result` messages instead of calling the append-stages REST API.
+- `PipelineRunner` now publishes appended stages together with the stage result payload, preserving stage input as normalized JSON/text for downstream persistence.
+
+### Fixed
+
+- Agent confirmation and rejection flows can now resolve `agent:responder` through the stage-name-to-id map emitted with appended stages, keeping plan-and-execute flows resumable after the transport refactor.
+
 ## [0.3.0-preview.9] - 2026-04-18
 
 ### Fixed
@@ -120,7 +161,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.0-preview.6...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.1-preview.3...HEAD
+[0.3.1-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.3
+[0.3.1-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.2
+[0.3.1-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.1
 [0.3.0-preview.6]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.6
 [0.3.0-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.3
 [0.3.0-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.0-preview.2

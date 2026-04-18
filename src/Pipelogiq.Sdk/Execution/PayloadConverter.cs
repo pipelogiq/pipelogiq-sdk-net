@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PipelogiqSDK.Contracts;
 
 namespace PipelogiqSDK.Execution;
@@ -9,6 +10,12 @@ internal static class PayloadConverter
     private static readonly JsonSerializerOptions SerializeOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    private static readonly JsonSerializerOptions DeserializeOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
 
     public static Dictionary<string, object> FromContextItems(IEnumerable<ContextItem> contextItems)
@@ -53,7 +60,7 @@ internal static class PayloadConverter
     {
         try
         {
-            return JsonSerializer.Deserialize(json, targetType);
+            return JsonSerializer.Deserialize(json, targetType, DeserializeOptions);
         }
         catch
         {
@@ -87,7 +94,7 @@ internal static class PayloadConverter
     {
         try
         {
-            value = JsonSerializer.Deserialize(json ?? "null", targetType);
+            value = JsonSerializer.Deserialize(json ?? "null", targetType, DeserializeOptions);
             return true;
         }
         catch

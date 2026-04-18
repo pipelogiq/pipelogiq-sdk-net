@@ -32,12 +32,19 @@ public class AgentCriticHandler(
         var pipelineId = context?.PipelineId
             ?? throw new InvalidOperationException("PipelineId is required for AgentCriticHandler.");
 
+        if (await HasFollowUpStagesAsync(pipelineId, context))
+        {
+            context.LogWarning(
+                $"Retry detected — follow-up stages already exist after stage {context.StageId}. Skipping re-execution to prevent duplicates.");
+            return StageResult.Success("Critic retry detected — follow-up stages already appended.");
+        }
+
         var proposal = context.TryGetValue<AgentThinkDecision>(AgentConstants.PendingProposal);
         if (proposal == null)
         {
             context.LogWarning("Critic invoked but no pending proposal found in context — falling through to think.");
-            await AppendStagesAsync(pipelineId, [BuildThinkStage()]);
-            return StageResult.Success("No pending proposal — think re-scheduled.");
+            var appendedStages = await AppendStagesAsync(pipelineId, [BuildThinkStage()]);
+            return StageResult.Success("No pending proposal — think re-scheduled.", appendedStages);
         }
 
         var criticMode = AgentCriticRuntime.ResolveMode(context, agentOptions);
@@ -117,8 +124,10 @@ public class AgentCriticHandler(
                     Content = proposal.RawDecisionJson,
                 });
                 SetContextValue(context, AgentConstants.ConversationHistory, history);
-                await AppendStagesAsync(pipelineId, [BuildToolStage(proposal.ToolCall), BuildThinkStage()]);
-                return StageResult.Success($"Critic approved — tool '{proposal.ToolCall.Tool}' scheduled.");
+                var toolStages = await AppendStagesAsync(pipelineId, [BuildToolStage(proposal.ToolCall), BuildThinkStage()]);
+                return StageResult.Success(
+                    $"Critic approved — tool '{proposal.ToolCall.Tool}' scheduled.",
+                    toolStages);
 
             case AgentThinkAction.NeedConfirmation when proposal.MutationsToConfirm?.Count > 0:
                 history.Add(new AgentConversationTurn
@@ -127,19 +136,20 @@ public class AgentCriticHandler(
                     Content = proposal.RawDecisionJson,
                 });
                 SetContextValue(context, AgentConstants.ConversationHistory, history);
-                await AppendStagesAsync(pipelineId, [
+                var confirmationStages = await AppendStagesAsync(pipelineId, [
                     BuildConfirmationStage(proposal.MutationsToConfirm!),
                     BuildThinkStage(),
                 ]);
                 return StageResult.Success(
-                    $"Critic approved — confirmation scheduled for {proposal.MutationsToConfirm!.Count} mutation(s).");
+                    $"Critic approved — confirmation scheduled for {proposal.MutationsToConfirm!.Count} mutation(s).",
+                    confirmationStages);
 
             default:
                 if (!string.IsNullOrWhiteSpace(proposal.FinalAnswer))
                     SetContextValue(context, "agent:directAnswer", proposal.FinalAnswer!);
-                await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+                var responderStages = await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
                 SetContextValue(context, AgentConstants.ResponderAppended, true);
-                return StageResult.Success("Critic approved — responder scheduled.");
+                return StageResult.Success("Critic approved — responder scheduled.", responderStages);
         }
     }
 
@@ -168,9 +178,10 @@ public class AgentCriticHandler(
         });
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
-        await AppendStagesAsync(pipelineId, [BuildThinkStage()]);
+        var appendedStages = await AppendStagesAsync(pipelineId, [BuildThinkStage()]);
         return StageResult.Success(
-            $"Critic rejected (rejection {nextRejectionCount}) — looping back to think with feedback.");
+            $"Critic rejected (rejection {nextRejectionCount}) — looping back to think with feedback.",
+            appendedStages);
     }
 
     private static string BuildCriticFeedbackBody(AgentThinkDecision proposal, AgentCriticVerdict verdict)
@@ -229,10 +240,9 @@ public class AgentCriticHandler(
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>Appends follow-up stages to the current pipeline. Overridable for tests.</summary>
-    protected virtual async Task AppendStagesAsync(int pipelineId, IEnumerable<StageInfo> stages)
+    protected virtual Task<List<StageInfo>> AppendStagesAsync(int pipelineId, IEnumerable<StageInfo> stages)
     {
-        var request = new AppendStagesRequest { Stages = stages.ToList() };
-        await apiClient.AppendAgentStagesAsync(pipelineId, request);
+        return Task.FromResult(stages.ToList());
     }
 
     private static void ClearCriticState(IStageContext context)
@@ -271,5 +281,25 @@ public class AgentCriticHandler(
         Add(AgentConstants.SessionTotalInputTokens, usage.InputTokens);
         Add(AgentConstants.SessionTotalOutputTokens, usage.OutputTokens);
         AddDecimal(AgentConstants.SessionEstimatedCostUsd, usage.EstimatedCostUsd);
+    }
+
+    private async Task<bool> HasFollowUpStagesAsync(int pipelineId, IStageContext? context)
+    {
+        var currentStageId = context?.StageId;
+        if (!currentStageId.HasValue || currentStageId.Value <= 0)
+            return false;
+
+        try
+        {
+            var pipeline = await apiClient.GetPipelineAsync(pipelineId);
+            return pipeline?.Stages?.Any(s =>
+                s.Id > currentStageId.Value &&
+                (s.Status is "NotStarted" or "Pending") &&
+                (s.Name?.StartsWith("agent:", StringComparison.OrdinalIgnoreCase) ?? false)) ?? false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

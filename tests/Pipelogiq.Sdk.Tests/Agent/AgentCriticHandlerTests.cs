@@ -262,10 +262,10 @@ public sealed class AgentCriticHandlerTests
     {
         public List<StageInfo> LastAppendedStages { get; private set; } = new();
 
-        protected override Task AppendStagesAsync(int pipelineId, IEnumerable<StageInfo> stages)
+        protected override Task<List<StageInfo>> AppendStagesAsync(int pipelineId, IEnumerable<StageInfo> stages)
         {
             LastAppendedStages = stages.ToList();
-            return Task.CompletedTask;
+            return Task.FromResult(LastAppendedStages);
         }
     }
 

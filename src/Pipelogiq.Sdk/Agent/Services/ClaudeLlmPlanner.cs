@@ -834,6 +834,16 @@ Response body:
 
     private static object BuildOllamaToolParameter(AgentToolParam param)
     {
+        return BuildToolParameterSchema(param, includeAnthropicExamples: false);
+    }
+
+    private static object BuildAnthropicToolParameter(AgentToolParam param)
+    {
+        return BuildToolParameterSchema(param, includeAnthropicExamples: true);
+    }
+
+    private static object BuildToolParameterSchema(AgentToolParam param, bool includeAnthropicExamples)
+    {
         var schema = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["type"] = param.Type,
@@ -847,29 +857,21 @@ Response body:
             schema["enum"] = param.EnumValues;
 
         if (TryBuildParameterExample(param, out var example))
-            schema["example"] = example;
-
-        if (TryBuildArrayItemsSchema(param, out var itemsSchema))
-            schema["items"] = itemsSchema;
-
-        return schema;
-    }
-
-    private static object BuildAnthropicToolParameter(AgentToolParam param)
-    {
-        var schema = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["type"] = param.Type,
-            ["description"] = param.Description,
-        };
+            if (includeAnthropicExamples)
+                schema["examples"] = new[] { example };
+            else
+                schema["example"] = example;
+        }
 
-        if (param.EnumValues is { Length: > 0 })
-            schema["enum"] = param.EnumValues;
+        if (TryBuildObjectSchema(param.Properties, includeAnthropicExamples, out var properties, out var required))
+        {
+            schema["properties"] = properties;
+            if (required.Count > 0)
+                schema["required"] = required;
+        }
 
-        if (TryBuildParameterExample(param, out var example))
-            schema["examples"] = new[] { example };
-
-        if (TryBuildArrayItemsSchema(param, out var itemsSchema))
+        if (TryBuildArrayItemsSchema(param, includeAnthropicExamples, out var itemsSchema))
             schema["items"] = itemsSchema;
 
         return schema;
@@ -905,19 +907,56 @@ Response body:
         return true;
     }
 
-    private static bool TryBuildArrayItemsSchema(AgentToolParam param, out Dictionary<string, object?>? itemsSchema)
+    private static bool TryBuildObjectSchema(
+        Dictionary<string, AgentToolParam>? nestedParams,
+        bool includeAnthropicExamples,
+        out Dictionary<string, object?>? properties,
+        out List<string> required)
+    {
+        properties = null;
+        required = [];
+
+        if (nestedParams == null || nestedParams.Count == 0)
+            return false;
+
+        properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (name, nestedParam) in nestedParams)
+        {
+            properties[name] = BuildToolParameterSchema(nestedParam, includeAnthropicExamples);
+            if (nestedParam.Required)
+                required.Add(name);
+        }
+
+        return true;
+    }
+
+    private static bool TryBuildArrayItemsSchema(
+        AgentToolParam param,
+        bool includeAnthropicExamples,
+        out Dictionary<string, object?>? itemsSchema)
     {
         itemsSchema = null;
         if (!string.Equals(param.Type, "array", StringComparison.OrdinalIgnoreCase))
             return false;
 
+        var itemsType = string.IsNullOrWhiteSpace(param.ItemsType)
+            ? "object"
+            : param.ItemsType!;
+
         itemsSchema = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["type"] = "object",
+            ["type"] = itemsType,
         };
 
         if (!string.IsNullOrWhiteSpace(param.ItemsDescription))
             itemsSchema["description"] = param.ItemsDescription;
+
+        if (TryBuildObjectSchema(param.ItemsProperties, includeAnthropicExamples, out var properties, out var required))
+        {
+            itemsSchema["properties"] = properties;
+            if (required.Count > 0)
+                itemsSchema["required"] = required;
+        }
 
         return true;
     }

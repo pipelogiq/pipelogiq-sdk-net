@@ -34,11 +34,26 @@ public class AgentToolParam
     /// </summary>
     public string[]? EnumValues { get; set; }
 
+    /// <summary>
+    /// For object type: nested property definitions for this object.
+    /// </summary>
+    public Dictionary<string, AgentToolParam>? Properties { get; set; }
+
     /// <summary>Concrete example value shown to the LLM.</summary>
     public string? Example { get; set; }
+
+    /// <summary>
+    /// For array type: JSON schema item type. Defaults to object when omitted.
+    /// </summary>
+    public string? ItemsType { get; set; }
 
     /// <summary>
     /// For array type: describes what each array item should look like.
     /// </summary>
     public string? ItemsDescription { get; set; }
+
+    /// <summary>
+    /// For array type when items are objects: nested property definitions for each item.
+    /// </summary>
+    public Dictionary<string, AgentToolParam>? ItemsProperties { get; set; }
 }

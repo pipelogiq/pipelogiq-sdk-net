@@ -491,7 +491,10 @@ public class PipelineRunner
         {
             Uri = new Uri(_bootstrap.MessageBroker.ConnectionString!),
             DispatchConsumersAsync = true,
-            AutomaticRecoveryEnabled = false,
+            AutomaticRecoveryEnabled = true,
+            TopologyRecoveryEnabled = true,
+            NetworkRecoveryInterval = TimeSpan.FromSeconds(5),
+            RequestedHeartbeat = TimeSpan.FromSeconds(30),
             ClientProvidedName = $"PipelogiqSDK.Runner/{ResolveWorkerName()}",
         };
 
@@ -523,6 +526,9 @@ public class PipelineRunner
 
     private async Task WaitForReconnectSignalAsync(CancellationToken stoppingToken)
     {
+        var consecutiveClosedChecks = 0;
+        const int maxClosedChecksBeforeReconnect = 4;
+
         while (!stoppingToken.IsCancellationRequested)
         {
             if (_sessionInvalid)
@@ -530,11 +536,22 @@ public class PipelineRunner
 
             if (_connection is null || !_connection.IsOpen)
             {
-                SetState(WorkerStates.Degraded, "Broker connection is closed.");
-                return;
-            }
+                consecutiveClosedChecks++;
+                if (consecutiveClosedChecks >= maxClosedChecksBeforeReconnect)
+                {
+                    SetState(WorkerStates.Degraded, "Broker connection is closed.");
+                    return;
+                }
 
-            TrySubscribeMissingStageNextQueues(stoppingToken);
+                _logger.LogWarning(
+                    "Broker connection not open (check {Check}/{Max}). Waiting for auto-recovery…",
+                    consecutiveClosedChecks, maxClosedChecksBeforeReconnect);
+            }
+            else
+            {
+                consecutiveClosedChecks = 0;
+                TrySubscribeMissingStageNextQueues(stoppingToken);
+            }
 
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
@@ -584,6 +601,17 @@ public class PipelineRunner
         try
         {
             _logger.LogInformation("Received StageNext: {Payload}", PipelineMessageSerializer.Serialize(parsedMessage));
+
+            if (delivery.Redelivered && await IsStageAlreadyTerminalAsync(parsedMessage))
+            {
+                _logger.LogWarning(
+                    "Skipping redelivered message for stage {StageId} — stage is already in a terminal state.",
+                    parsedMessage.StageId);
+                Interlocked.Increment(ref _jobsProcessed);
+                SafeAck(channel, delivery.DeliveryTag);
+                return;
+            }
+
             var isSuccess = await ExecuteAndPublishResult(parsedMessage, stoppingToken);
 
             if (isSuccess)
@@ -626,7 +654,7 @@ public class PipelineRunner
 
     private async Task<bool> ExecuteAndPublishResult(StageNextDto stage, CancellationToken stoppingToken)
     {
-        var resultDto = new StageResultDto
+        var resultDto = new WorkerStageResultMessage
         {
             PipelineId = stage.PipelineId,
             StageId = stage.StageId,
@@ -653,8 +681,11 @@ public class PipelineRunner
             resultDto.NextStageId = stageResult.NextStageId;
             resultDto.RunNextIfCurrentFailed = stageResult.RunNextIfCurrentFailed;
             resultDto.IsWaitingForApproval = stageResult.IsWaitingForApproval;
+            resultDto.AppendedStages = stageResult.AppendedStages?
+                .Select(MapAppendedStage)
+                .ToList();
             logger.Info(
-                $"Stage execution finished [stageId={stage.StageId}, success={stageResult.IsSuccess}, waitingForApproval={stageResult.IsWaitingForApproval}, errorCode={stageResult.ErrorCode ?? "-"}, nextStageId={(stageResult.NextStageId?.ToString() ?? "-")}, contextItems={stageResult.ContextItems?.Count ?? 0}, resultPreview={stageResult.Result.ToLogPreview(800)}]");
+                $"Stage execution finished [stageId={stage.StageId}, success={stageResult.IsSuccess}, waitingForApproval={stageResult.IsWaitingForApproval}, errorCode={stageResult.ErrorCode ?? "-"}, nextStageId={(stageResult.NextStageId?.ToString() ?? "-")}, contextItems={stageResult.ContextItems?.Count ?? 0}, appendedStages={stageResult.AppendedStages?.Count ?? 0}, resultPreview={stageResult.Result.ToLogPreview(800)}]");
         }
         catch (Exception ex)
         {
@@ -674,6 +705,32 @@ public class PipelineRunner
         await PublishToQueueAsync(_stageResultQueue, serializedResult, resultPublishCts.Token);
 
         return resultDto.IsSuccess;
+    }
+
+    private static WorkerAppendedStageMessage MapAppendedStage(StageInfo stage)
+    {
+        return new WorkerAppendedStageMessage
+        {
+            StageId = stage.StageId,
+            PipelineId = stage.PipelineId,
+            StageName = stage.StageName,
+            StageHandlerName = stage.StageHandlerName,
+            Description = null,
+            Input = NormalizeStageInput(stage.Input),
+            Options = stage.Options,
+            IsEvent = stage.IsEvent,
+        };
+    }
+
+    private static string? NormalizeStageInput(object? input)
+    {
+        return input switch
+        {
+            null => null,
+            string text when string.IsNullOrWhiteSpace(text) => null,
+            string text => text,
+            _ => PipelineMessageSerializer.Serialize(input)
+        };
     }
 
     private StageExecutionData BuildExecutionData(StageNextDto stage)
@@ -1302,6 +1359,27 @@ public class PipelineRunner
         return builder.ToString();
     }
 
+    private async Task<bool> IsStageAlreadyTerminalAsync(StageNextDto stage)
+    {
+        if (!stage.PipelineId.HasValue)
+            return false;
+
+        try
+        {
+            var pipeline = await _apiClient.GetPipelineAsync(stage.PipelineId.Value);
+            var current = pipeline?.Stages?.FirstOrDefault(s => s.Id == stage.StageId);
+            if (current is null)
+                return false;
+
+            return current.Status is "Completed" or "Failed" or "Skipped";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not verify stage {StageId} status before execution — proceeding.", stage.StageId);
+            return false;
+        }
+    }
+
     private bool ShouldRequeueAfterFailure()
     {
         if (_bootstrap is null)
@@ -1455,6 +1533,33 @@ public class PipelineRunner
         catch
         {
         }
+    }
+
+    private sealed class WorkerStageResultMessage
+    {
+        public int? PipelineId { get; set; }
+        public int StageId { get; set; }
+        public string Result { get; set; } = string.Empty;
+        public bool IsSuccess { get; set; }
+        public string? ErrorCode { get; set; }
+        public int? NextStageId { get; set; }
+        public bool RunNextIfCurrentFailed { get; set; }
+        public bool IsWaitingForApproval { get; set; }
+        public List<StageLogDto>? Logs { get; set; }
+        public List<ContextItem>? ContextItems { get; set; }
+        public List<WorkerAppendedStageMessage>? AppendedStages { get; set; }
+    }
+
+    private sealed class WorkerAppendedStageMessage
+    {
+        public int? StageId { get; set; }
+        public int? PipelineId { get; set; }
+        public string? StageName { get; set; }
+        public string? StageHandlerName { get; set; }
+        public string? Description { get; set; }
+        public string? Input { get; set; }
+        public StageOptions? Options { get; set; }
+        public bool? IsEvent { get; set; }
     }
 
     private sealed class WorkerConfigurationException(string message, Exception? innerException = null)

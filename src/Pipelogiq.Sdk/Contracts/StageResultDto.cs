@@ -36,4 +36,7 @@ public class StageResultDto : IStageResult
 
     /// <inheritdoc />
     public List<ContextItem>? ContextItems { get; set; }
+
+    /// <inheritdoc />
+    public List<StageInfo>? AppendedStages { get; set; }
 }

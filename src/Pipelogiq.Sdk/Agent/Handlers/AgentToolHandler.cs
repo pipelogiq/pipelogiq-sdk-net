@@ -710,30 +710,31 @@ public class AgentToolHandler(
     {
         if (value is JsonElement element)
         {
-            if (element.ValueKind != JsonValueKind.Array)
-                throw new InvalidOperationException(
-                    $"Tool '{toolName}' parameter '{paramName}' must be an array.");
+            if (element.ValueKind == JsonValueKind.Array)
+            {
+                var parsedFromArrayElement = TryDeserializeArray(element.GetRawText());
+                if (parsedFromArrayElement != null)
+                    return parsedFromArrayElement;
+            }
 
-            return element.EnumerateArray().Select(GetPrimitive).ToArray()!;
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                var parsedFromStringElement = TryDeserializeArray(element.GetString());
+                if (parsedFromStringElement != null)
+                    return parsedFromStringElement;
+            }
+
+            throw new InvalidOperationException(
+                $"Tool '{toolName}' parameter '{paramName}' must be an array.");
         }
 
         if (value is IEnumerable<object?> enumerable && value is not string)
             return enumerable.ToArray()!;
 
         var text = Convert.ToString(value, CultureInfo.InvariantCulture);
-        if (string.IsNullOrWhiteSpace(text))
-            return Array.Empty<object>();
-
-        try
-        {
-            var parsed = JsonSerializer.Deserialize<object[]>(text);
-            if (parsed != null)
-                return parsed;
-        }
-        catch
-        {
-            // ignored, explicit error below
-        }
+        var parsed = TryDeserializeArray(text);
+        if (parsed != null)
+            return parsed;
 
         throw new InvalidOperationException(
             $"Tool '{toolName}' parameter '{paramName}' must be a JSON array.");
@@ -743,13 +744,22 @@ public class AgentToolHandler(
     {
         if (value is JsonElement element)
         {
-            if (element.ValueKind != JsonValueKind.Object)
-                throw new InvalidOperationException(
-                    $"Tool '{toolName}' parameter '{paramName}' must be an object.");
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                var parsedFromObjectElement = TryDeserializeObject(element.GetRawText());
+                if (parsedFromObjectElement != null)
+                    return parsedFromObjectElement;
+            }
 
-            var json = element.GetRawText();
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(json, JsonOptions)
-                   ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                var parsedFromStringElement = TryDeserializeObject(element.GetString());
+                if (parsedFromStringElement != null)
+                    return parsedFromStringElement;
+            }
+
+            throw new InvalidOperationException(
+                $"Tool '{toolName}' parameter '{paramName}' must be an object.");
         }
 
         if (value is Dictionary<string, object?> typedDictionary)
@@ -759,22 +769,42 @@ public class AgentToolHandler(
             return readOnlyDictionary.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
 
         var text = Convert.ToString(value, CultureInfo.InvariantCulture);
+        var parsed = TryDeserializeObject(text);
+        if (parsed != null)
+            return parsed;
+
+        throw new InvalidOperationException(
+            $"Tool '{toolName}' parameter '{paramName}' must be a JSON object.");
+    }
+
+    private static object[]? TryDeserializeArray(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Array.Empty<object>();
+
+        try
+        {
+            return JsonSerializer.Deserialize<object[]>(text, JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static Dictionary<string, object?>? TryDeserializeObject(string? text)
+    {
         if (string.IsNullOrWhiteSpace(text))
             return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
-            var parsed = JsonSerializer.Deserialize<Dictionary<string, object?>>(text, JsonOptions);
-            if (parsed != null)
-                return parsed;
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(text, JsonOptions);
         }
         catch
         {
-            // ignored, explicit error below
+            return null;
         }
-
-        throw new InvalidOperationException(
-            $"Tool '{toolName}' parameter '{paramName}' must be a JSON object.");
     }
 
     private static bool TryParseBoolean(string? text, out bool parsed)
