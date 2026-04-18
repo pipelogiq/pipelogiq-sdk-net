@@ -5,6 +5,12 @@ namespace PipelogiqSDK.Agent.Models;
 /// </summary>
 public class AgentLlmUsage
 {
+    /// <summary>Provider that served the request (e.g. Anthropic, OpenAI, Ollama).</summary>
+    public string? Provider { get; set; }
+
+    /// <summary>Concrete model used for the request.</summary>
+    public string? Model { get; set; }
+
     /// <summary>Total input tokens consumed.</summary>
     public int InputTokens { get; set; }
 

@@ -36,7 +36,10 @@ public class AgentCriticHandler(
         {
             context.LogWarning(
                 $"Retry detected — follow-up stages already exist after stage {context.StageId}. Skipping re-execution to prevent duplicates.");
-            return StageResult.Success("Critic retry detected — follow-up stages already appended.");
+            var output = AgentUsageContextHelper.BuildStageOutput(
+                "Critic retry detected — follow-up stages already appended.",
+                context);
+            return StageResult.Success(output);
         }
 
         var proposal = context.TryGetValue<AgentThinkDecision>(AgentConstants.PendingProposal);
@@ -44,7 +47,10 @@ public class AgentCriticHandler(
         {
             context.LogWarning("Critic invoked but no pending proposal found in context — falling through to think.");
             var appendedStages = await AppendStagesAsync(pipelineId, [BuildThinkStage()]);
-            return StageResult.Success("No pending proposal — think re-scheduled.", appendedStages);
+            var output = AgentUsageContextHelper.BuildStageOutput(
+                "No pending proposal — think re-scheduled.",
+                context);
+            return StageResult.Success(output, appendedStages);
         }
 
         var criticMode = AgentCriticRuntime.ResolveMode(context, agentOptions);
@@ -85,19 +91,19 @@ public class AgentCriticHandler(
             return await ApproveAndScheduleAsync(pipelineId, proposal, context);
         }
 
-        AccumulateTokenUsage(context, verdict.TokenUsage);
+        AgentUsageContextHelper.RecordLlmCall(context, verdict.TokenUsage);
         context.LogInfo(
             $"Critic verdict [decision={verdict.Decision}, confidence={verdict.Confidence?.ToString("0.00") ?? "-"}, concerns={verdict.Concerns?.Count ?? 0}, feedback={verdict.Feedback.ToLogPreview(400)}]");
 
         if (verdict.Decision == AgentCriticDecision.Approve)
-            return await ApproveAndScheduleAsync(pipelineId, proposal, context);
+            return await ApproveAndScheduleAsync(pipelineId, proposal, context, verdict.TokenUsage);
 
         var nextRejectionCount = rejectionCount + 1;
         if (nextRejectionCount > criticSettings.MaxRejectionsPerStep)
         {
             context.LogWarning(
                 $"Critic rejection cap reached [cap={criticSettings.MaxRejectionsPerStep}] — approving proposal to make forward progress.");
-            return await ApproveAndScheduleAsync(pipelineId, proposal, context);
+            return await ApproveAndScheduleAsync(pipelineId, proposal, context, verdict.TokenUsage);
         }
 
         return await RejectAndLoopAsync(pipelineId, proposal, verdict, nextRejectionCount, history, context);
@@ -108,7 +114,8 @@ public class AgentCriticHandler(
     private async Task<IStageResult> ApproveAndScheduleAsync(
         int pipelineId,
         AgentThinkDecision proposal,
-        IStageContext context)
+        IStageContext context,
+        AgentLlmUsage? reviewUsage = null)
     {
         ClearCriticState(context);
 
@@ -125,9 +132,12 @@ public class AgentCriticHandler(
                 });
                 SetContextValue(context, AgentConstants.ConversationHistory, history);
                 var toolStages = await AppendStagesAsync(pipelineId, [BuildToolStage(proposal.ToolCall), BuildThinkStage()]);
-                return StageResult.Success(
+                var toolOutput = AgentUsageContextHelper.BuildStageOutput(
                     $"Critic approved — tool '{proposal.ToolCall.Tool}' scheduled.",
-                    toolStages);
+                    context,
+                    reviewUsage,
+                    "critic");
+                return StageResult.Success(toolOutput, toolStages);
 
             case AgentThinkAction.NeedConfirmation when proposal.MutationsToConfirm?.Count > 0:
                 history.Add(new AgentConversationTurn
@@ -140,16 +150,24 @@ public class AgentCriticHandler(
                     BuildConfirmationStage(proposal.MutationsToConfirm!),
                     BuildThinkStage(),
                 ]);
-                return StageResult.Success(
+                var confirmationOutput = AgentUsageContextHelper.BuildStageOutput(
                     $"Critic approved — confirmation scheduled for {proposal.MutationsToConfirm!.Count} mutation(s).",
-                    confirmationStages);
+                    context,
+                    reviewUsage,
+                    "critic");
+                return StageResult.Success(confirmationOutput, confirmationStages);
 
             default:
                 if (!string.IsNullOrWhiteSpace(proposal.FinalAnswer))
                     SetContextValue(context, "agent:directAnswer", proposal.FinalAnswer!);
                 var responderStages = await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
                 SetContextValue(context, AgentConstants.ResponderAppended, true);
-                return StageResult.Success("Critic approved — responder scheduled.", responderStages);
+                var responderOutput = AgentUsageContextHelper.BuildStageOutput(
+                    "Critic approved — responder scheduled.",
+                    context,
+                    reviewUsage,
+                    "critic");
+                return StageResult.Success(responderOutput, responderStages);
         }
     }
 
@@ -179,9 +197,12 @@ public class AgentCriticHandler(
         SetContextValue(context, AgentConstants.ConversationHistory, history);
 
         var appendedStages = await AppendStagesAsync(pipelineId, [BuildThinkStage()]);
-        return StageResult.Success(
+        var output = AgentUsageContextHelper.BuildStageOutput(
             $"Critic rejected (rejection {nextRejectionCount}) — looping back to think with feedback.",
-            appendedStages);
+            context,
+            verdict.TokenUsage,
+            "critic");
+        return StageResult.Success(output, appendedStages);
     }
 
     private static string BuildCriticFeedbackBody(AgentThinkDecision proposal, AgentCriticVerdict verdict)
@@ -258,29 +279,6 @@ public class AgentCriticHandler(
         if (context == null) return;
         context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         context.Payload[key] = value;
-    }
-
-    private static void AccumulateTokenUsage(IStageContext? context, AgentLlmUsage? usage)
-    {
-        if (context == null || usage == null) return;
-
-        context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-
-        void Add(string key, long value)
-        {
-            var current = context.TryGetValue<long>(key);
-            context.Payload[key] = current + value;
-        }
-
-        void AddDecimal(string key, decimal value)
-        {
-            var current = context.TryGetValue<decimal>(key);
-            context.Payload[key] = current + value;
-        }
-
-        Add(AgentConstants.SessionTotalInputTokens, usage.InputTokens);
-        Add(AgentConstants.SessionTotalOutputTokens, usage.OutputTokens);
-        AddDecimal(AgentConstants.SessionEstimatedCostUsd, usage.EstimatedCostUsd);
     }
 
     private async Task<bool> HasFollowUpStagesAsync(int pipelineId, IStageContext? context)

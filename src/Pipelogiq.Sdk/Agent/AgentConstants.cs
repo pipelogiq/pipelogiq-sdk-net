@@ -38,6 +38,10 @@ internal static class AgentConstants
     public const string SessionCacheReadTokens = "agent:session:cacheReadTokens";
     public const string SessionCacheCreationTokens = "agent:session:cacheCreationTokens";
     public const string SessionEstimatedCostUsd = "agent:session:estimatedCostUsd";
+    public const string SessionLlmCallCount = "agent:session:llmCallCount";
+    public const string SessionUsageSummary = "agent:session:usageSummary";
+    public const string TerminalFailure = "agent:terminalFailure";
+    public const string TerminalFailureCode = "agent:terminalFailureCode";
 
     // Handler names (used for registration and routing)
     public const string OrchestratorHandlerName = "AgentOrchestratorHandler";

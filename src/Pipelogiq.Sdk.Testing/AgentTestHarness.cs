@@ -204,7 +204,7 @@ public sealed class AgentTestHarness
             var toolResults = context.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults) ?? [];
             toolCallResults.AddRange(toolResults);
             finalResponse = toolResults.Count > 0
-                ? await _mockPlanner.SynthesizeAsync(userMessage, toolResults, ct)
+                ? (await _mockPlanner.SynthesizeAsync(userMessage, toolResults, ct)).Text
                 : "No response.";
         }
 

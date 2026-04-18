@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1-preview.4] - 2026-04-18
+
+### Added
+
+- Agent stage outputs and accumulated context usage now expose richer LLM accounting metadata, including per-call token totals, cache read/write counters, provider/model identity, and estimated USD cost for pipeline inspection surfaces.
+
+### Changed
+
+- Terminal agent loop-protection paths now finish as failed stage results instead of green `Completed` outcomes, so pipelines that end in unrecoverable tool loops are visible as failures in downstream dashboards and status syncs.
+- Tool-loop detection now short-circuits on clearly non-recoverable tool failures such as missing required parameters or input deserialization errors, reducing wasted LLM retries and cost.
+- Release metadata, README badges, and package version references now point to `0.3.1-preview.4`.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.1-preview.4` for this branch state.
+
 ## [0.3.1-preview.3] - 2026-04-18
 
 ### Changed
@@ -161,7 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.1-preview.3...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.1-preview.4...HEAD
+[0.3.1-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.4
 [0.3.1-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.3
 [0.3.1-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.2
 [0.3.1-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.1

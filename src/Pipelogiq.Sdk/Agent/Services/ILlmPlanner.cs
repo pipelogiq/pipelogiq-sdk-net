@@ -20,7 +20,7 @@ public interface ILlmPlanner
     /// <summary>
     /// Synthesizes a final user-facing response from the original message and tool results.
     /// </summary>
-    Task<string> SynthesizeAsync(
+    Task<AgentTextResult> SynthesizeAsync(
         string originalMessage,
         IReadOnlyList<AgentToolResult> results,
         CancellationToken ct = default);

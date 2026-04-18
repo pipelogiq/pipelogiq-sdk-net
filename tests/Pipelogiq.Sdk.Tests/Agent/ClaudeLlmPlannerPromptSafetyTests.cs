@@ -459,7 +459,7 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
                 }
             ]);
 
-        Assert.Equal("ok", result);
+        Assert.Equal("ok", result.Text);
         Assert.NotNull(recordingHandler.LastRequestBody);
 
         using var request = JsonDocument.Parse(recordingHandler.LastRequestBody!);

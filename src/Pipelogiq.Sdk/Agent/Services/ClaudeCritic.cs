@@ -120,6 +120,8 @@ public class ClaudeCritic(IHttpClientFactory httpClientFactory) : IAgentCritic
 
         return new AgentLlmUsage
         {
+            Provider = "Anthropic",
+            Model = model,
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             EstimatedCostUsd = cost,

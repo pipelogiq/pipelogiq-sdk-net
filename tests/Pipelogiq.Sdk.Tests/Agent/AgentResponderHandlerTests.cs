@@ -88,6 +88,31 @@ public sealed class AgentResponderHandlerTests
         Assert.False(context.Payload!.ContainsKey("agent:finalResponse"));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenTerminalFailureFlagSet_ReturnsFailedResult()
+    {
+        var handler = new AgentResponderHandler(new StaticPlanner("unused"), notificationRouter: null);
+
+        var context = new StageContext
+        {
+            PipelineId = 301,
+            StageId = 401,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Generate budget",
+                ["agent:directAnswer"] = "I'm sorry, I was unable to complete this step.",
+                ["agent:terminalFailure"] = true,
+                ["agent:terminalFailureCode"] = "TOOL_LOOP",
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("TOOL_LOOP", result.ErrorCode);
+        Assert.Equal("I'm sorry, I was unable to complete this step.", context.Payload!["agent:finalResponse"]);
+    }
+
     private sealed class StaticPlanner(string finalResponse) : ILlmPlanner
     {
         public Task<AgentPlan> PlanAsync(
@@ -99,12 +124,12 @@ public sealed class AgentResponderHandlerTests
             return Task.FromResult(new AgentPlan());
         }
 
-        public Task<string> SynthesizeAsync(
+        public Task<AgentTextResult> SynthesizeAsync(
             string originalMessage,
             IReadOnlyList<AgentToolResult> results,
             CancellationToken ct = default)
         {
-            return Task.FromResult(finalResponse);
+            return Task.FromResult(new AgentTextResult { Text = finalResponse });
         }
 
         public Task<AgentThinkDecision> ThinkAsync(

@@ -22,6 +22,7 @@ public class AgentResponderHandler(
         // Check if there's a direct answer (no tool calls needed or rejection message)
         var directAnswer = context.TryGetValue<string>("agent:directAnswer");
         string responseText;
+        AgentLlmUsage? synthUsage = null;
         if (!string.IsNullOrWhiteSpace(directAnswer))
         {
             responseText = directAnswer;
@@ -34,12 +35,26 @@ public class AgentResponderHandler(
                               ?? new List<AgentToolResult>();
 
             context.LogInfo($"Responder synthesizing final message from {toolResults.Count} tool result(s).");
-            responseText = toolResults.Count > 0
-                ? await llmPlanner.SynthesizeAsync(originalMessage, toolResults)
-                : "The request has been processed.";
+            if (toolResults.Count > 0)
+            {
+                var synthResult = await llmPlanner.SynthesizeAsync(originalMessage, toolResults);
+                responseText = synthResult.Text;
+                synthUsage = synthResult.TokenUsage;
+                AgentUsageContextHelper.RecordLlmCall(context, synthUsage);
+            }
+            else
+            {
+                responseText = "The request has been processed.";
+            }
         }
 
         var result = await SendOrFallbackAsync(context, responseText);
+        var output = AgentUsageContextHelper.BuildStageOutput(
+            result.Result,
+            context,
+            synthUsage,
+            synthUsage != null ? "synthesize" : null);
+        result.Result = output;
 
         // Save conversation history for multi-turn continuity.
         // The next user message from the same session will load this history
@@ -66,6 +81,15 @@ public class AgentResponderHandler(
             {
                 // Observer errors are intentionally swallowed — they must never affect agent flow
             }
+        }
+
+        var terminalFailure = context.TryGetValue<bool>(AgentConstants.TerminalFailure);
+        if (terminalFailure)
+        {
+            var errorCode = context.TryGetValue<string>(AgentConstants.TerminalFailureCode);
+            return StageResult.Error(
+                output,
+                string.IsNullOrWhiteSpace(errorCode) ? "AGENT_TERMINAL_FAILURE" : errorCode);
         }
 
         return result;

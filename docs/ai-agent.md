@@ -313,7 +313,9 @@ Cached tokens cost ~10% of normal input tokens. Token and cost accumulators are 
 | `agent:session:outputTokens` | Total output tokens generated |
 | `agent:session:cacheReadTokens` | Tokens served from cache |
 | `agent:session:cacheCreationTokens` | Tokens written to cache |
+| `agent:session:llmCallCount` | Total number of LLM API calls made |
 | `agent:session:estimatedCostUsd` | Running cost estimate in USD |
+| `agent:session:usageSummary` | Structured JSON summary with per-model breakdown and total estimated cost |
 
 ## Long-Term Memory
 

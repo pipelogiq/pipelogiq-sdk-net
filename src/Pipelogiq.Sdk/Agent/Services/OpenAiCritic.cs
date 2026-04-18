@@ -115,6 +115,8 @@ public class OpenAiCritic(IHttpClientFactory httpClientFactory) : IAgentCritic
 
         return new AgentLlmUsage
         {
+            Provider = "OpenAI",
+            Model = model,
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             EstimatedCostUsd = cost,

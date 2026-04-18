@@ -49,16 +49,20 @@ public class AgentThinkHandler(
                 $"Agent reached the maximum number of reasoning steps ({agentOptions.MaxThinkSteps}).");
             context.LogWarning($"Think limit reached [step={stepCount}, max={agentOptions.MaxThinkSteps}]");
             var appendedStages = await EnsureResponderStageAppendedAsync(pipelineId, context);
-            return StageResult.Success(
+            var output = AgentUsageContextHelper.BuildStageOutput(
                 $"Max think steps ({agentOptions.MaxThinkSteps}) reached — responder appended.",
-                appendedStages);
+                context);
+            return StageResult.Success(output, appendedStages);
         }
 
         if (await HasFollowUpStagesAsync(pipelineId, context))
         {
             context.LogWarning(
                 $"Retry detected — follow-up stages already exist after stage {context.StageId}. Skipping re-execution to prevent duplicates.");
-            return StageResult.Success($"Think step {stepCount}: retry detected — follow-up stages already appended.");
+            var output = AgentUsageContextHelper.BuildStageOutput(
+                $"Think step {stepCount}: retry detected — follow-up stages already appended.",
+                context);
+            return StageResult.Success(output);
         }
 
         // Ask LLM for next action — declare early so it's available to session loading below
@@ -100,7 +104,10 @@ public class AgentThinkHandler(
                 SetContextValue(context, AgentConstants.ConversationHistory, history);
                 context.LogWarning("Approval rejected. Switching directly to responder.");
                 var appendedStages = await EnsureResponderStageAppendedAsync(pipelineId, context);
-                return StageResult.Success("Confirmation rejected — responder appended.", appendedStages);
+                var output = AgentUsageContextHelper.BuildStageOutput(
+                    "Confirmation rejected — responder appended.",
+                    context);
+                return StageResult.Success(output, appendedStages);
             }
 
             // Approved — extract ApprovedMutations from the last confirmation_requested turn
@@ -119,15 +126,16 @@ public class AgentThinkHandler(
             SetContextValue(context, "agent:directAnswer",
                 $"I'm sorry, I was unable to complete this step — the tool '{loopingTool}' " +
                 "failed repeatedly. Please try again or rephrase your request.");
+            SetContextValue(context, AgentConstants.TerminalFailure, true);
+            SetContextValue(context, AgentConstants.TerminalFailureCode, "TOOL_LOOP");
             context.LogWarning($"Tool loop detected [tool={loopingTool}, consecutiveFailures>={MaxConsecutiveToolFailures}]");
             var appendedStages = await EnsureResponderStageAppendedAsync(pipelineId, context);
-            return new StageResultDto
-            {
-                Result = $"Tool loop detected for '{loopingTool}' — responder appended.",
-                IsSuccess = true,
-                ErrorCode = "TOOL_LOOP",
-                AppendedStages = appendedStages,
-            };
+            return StageResult.Error(
+                AgentUsageContextHelper.BuildStageOutput(
+                    $"Tool loop detected for '{loopingTool}' — responder appended.",
+                    context),
+                "TOOL_LOOP",
+                appendedStages);
         }
 
         // Check token budget before calling the LLM
@@ -135,15 +143,16 @@ public class AgentThinkHandler(
         {
             SetContextValue(context, "agent:directAnswer",
                 "The agent stopped because the token or cost budget for this session was exceeded.");
+            SetContextValue(context, AgentConstants.TerminalFailure, true);
+            SetContextValue(context, AgentConstants.TerminalFailureCode, "BUDGET_EXCEEDED");
             context.LogWarning("Token or cost budget exceeded. Switching to responder.");
             var appendedStages = await EnsureResponderStageAppendedAsync(pipelineId, context);
-            return new StageResultDto
-            {
-                Result = "Token budget exceeded — responder appended.",
-                IsSuccess = true,
-                ErrorCode = "BUDGET_EXCEEDED",
-                AppendedStages = appendedStages,
-            };
+            return StageResult.Error(
+                AgentUsageContextHelper.BuildStageOutput(
+                    "Token budget exceeded — responder appended.",
+                    context),
+                "BUDGET_EXCEEDED",
+                appendedStages);
         }
 
         // Emit progress notification
@@ -177,7 +186,7 @@ public class AgentThinkHandler(
         }
 
         // Accumulate token usage in context
-        AccumulateTokenUsage(context, decision.TokenUsage);
+        AgentUsageContextHelper.RecordLlmCall(context, decision.TokenUsage);
         context.LogInfo(
             $"Think decision received [action={decision.Action}, tool={(decision.ToolCall?.Tool ?? "-")}, confirmations={decision.MutationsToConfirm?.Count ?? 0}, hasFinalAnswer={!string.IsNullOrWhiteSpace(decision.FinalAnswer)}, decisionPreview={decision.RawDecisionJson.ToLogPreview(800)}]");
 
@@ -262,9 +271,12 @@ public class AgentThinkHandler(
         context.LogInfo(
             $"Think proposal routed to critic [action={decision.Action}, tool={(decision.ToolCall?.Tool ?? "-")}]");
         var appendedStages = await AppendStagesAsync(pipelineId, [BuildCriticStage()]);
-        return StageResult.Success(
+        var output = AgentUsageContextHelper.BuildStageOutput(
             $"Think step {GetStep(context)}: proposal sent to critic for review.",
-            appendedStages);
+            context,
+            decision.TokenUsage,
+            "think");
+        return StageResult.Success(output, appendedStages);
     }
 
     private static StageInfo BuildCriticStage() => new()
@@ -302,7 +314,12 @@ public class AgentThinkHandler(
             $"Scheduling tool call [tool={call.Tool}, resultKey={call.EffectiveResultKey}, params={call.Params.ToLogPreview(800)}]");
         var appendedStages = await AppendStagesAsync(pipelineId, [BuildToolStage(call), BuildThinkStage()]);
 
-        return StageResult.Success($"Think step {GetStep(context)}: calling tool '{call.Tool}'.", appendedStages);
+        var output = AgentUsageContextHelper.BuildStageOutput(
+            $"Think step {GetStep(context)}: calling tool '{call.Tool}'.",
+            context,
+            decision.TokenUsage,
+            "think");
+        return StageResult.Success(output, appendedStages);
     }
 
     private async Task<IStageResult> HandleNeedConfirmationAsync(
@@ -326,9 +343,12 @@ public class AgentThinkHandler(
             BuildThinkStage(),
         ]);
 
-        return StageResult.Success(
+        var output = AgentUsageContextHelper.BuildStageOutput(
             $"Think step {GetStep(context)}: confirmation requested for {decision.MutationsToConfirm!.Count} mutation(s).",
-            appendedStages);
+            context,
+            decision.TokenUsage,
+            "think");
+        return StageResult.Success(output, appendedStages);
     }
 
     private async Task<IStageResult> HandleDoneAsync(
@@ -342,9 +362,12 @@ public class AgentThinkHandler(
         context.LogInfo($"Think loop completed. Final answer preview: {decision.FinalAnswer.ToLogPreview(800)}");
         var appendedStages = await EnsureResponderStageAppendedAsync(pipelineId, context);
 
-        return StageResult.Success(
+        var output = AgentUsageContextHelper.BuildStageOutput(
             $"Think step {GetStep(context)}: reasoning complete — responder appended.",
-            appendedStages);
+            context,
+            decision.TokenUsage,
+            "think");
+        return StageResult.Success(output, appendedStages);
     }
 
     // ── Stage builders ───────────────────────────────────────────────────────
@@ -555,6 +578,11 @@ public class AgentThinkHandler(
     {
         if (context?.Payload == null) return null;
 
+        var toolResults = context.TryGetValue<List<AgentToolResult>>(AgentConstants.ToolResults);
+        var lastToolResult = toolResults?.LastOrDefault();
+        if (lastToolResult is { IsSuccess: false } && LooksNonRecoverableToolFailure(lastToolResult))
+            return lastToolResult.ToolName;
+
         foreach (var (key, value) in context.Payload)
         {
             if (!key.StartsWith(AgentConstants.ToolFailureCountPrefix, StringComparison.OrdinalIgnoreCase))
@@ -570,6 +598,16 @@ public class AgentThinkHandler(
         }
 
         return null;
+    }
+
+    private static bool LooksNonRecoverableToolFailure(AgentToolResult result)
+    {
+        var body = result.ResponseBody;
+        if (string.IsNullOrWhiteSpace(body))
+            return false;
+
+        return body.Contains("requires parameter", StringComparison.OrdinalIgnoreCase) ||
+               body.Contains("Parameter deserialization failed", StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Token budget ─────────────────────────────────────────────────────────
@@ -593,31 +631,6 @@ public class AgentThinkHandler(
         }
 
         return false;
-    }
-
-    private static void AccumulateTokenUsage(IStageContext? context, AgentLlmUsage? usage)
-    {
-        if (context == null || usage == null) return;
-
-        context.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-
-        void Add(string key, long value)
-        {
-            var current = context.TryGetValue<long>(key);
-            context.Payload[key] = current + value;
-        }
-
-        void AddDecimal(string key, decimal value)
-        {
-            var current = context.TryGetValue<decimal>(key);
-            context.Payload[key] = current + value;
-        }
-
-        Add(AgentConstants.SessionTotalInputTokens, usage.InputTokens);
-        Add(AgentConstants.SessionTotalOutputTokens, usage.OutputTokens);
-        Add(AgentConstants.SessionCacheReadTokens, usage.CacheReadTokens);
-        Add(AgentConstants.SessionCacheCreationTokens, usage.CacheCreationTokens);
-        AddDecimal(AgentConstants.SessionEstimatedCostUsd, usage.EstimatedCostUsd);
     }
 
     // ── Session history (cross-pipeline continuity) ──────────────────────────

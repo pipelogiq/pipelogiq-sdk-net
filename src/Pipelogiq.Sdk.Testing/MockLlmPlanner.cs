@@ -50,11 +50,11 @@ public sealed class MockLlmPlanner : ILlmPlanner
     }
 
     /// <inheritdoc />
-    public Task<string> SynthesizeAsync(
+    public Task<AgentTextResult> SynthesizeAsync(
         string originalMessage,
         IReadOnlyList<AgentToolResult> results,
         CancellationToken ct = default)
-        => Task.FromResult(_synthesizeResponse);
+        => Task.FromResult(new AgentTextResult { Text = _synthesizeResponse });
 }
 
 /// <summary>A single scripted think step.</summary>

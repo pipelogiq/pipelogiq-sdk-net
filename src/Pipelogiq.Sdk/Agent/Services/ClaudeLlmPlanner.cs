@@ -65,7 +65,7 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
     }
 
     /// <inheritdoc />
-    public async Task<string> SynthesizeAsync(
+    public async Task<AgentTextResult> SynthesizeAsync(
         string originalMessage,
         IReadOnlyList<AgentToolResult> results,
         CancellationToken ct = default)
@@ -83,8 +83,12 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
         var userText = $"User request:\n{originalMessage}\n\nTool results:\n{resultsText}";
         var messages = new List<object> { new { role = "user", content = userText } };
 
-        var (responseText, _) = await CallLlmWithMessagesInternalAsync(system, messages, Array.Empty<AgentToolDefinition>(), ct, responseMode: LlmResponseMode.Text);
-        return responseText;
+        var (responseText, usage) = await CallLlmWithMessagesInternalAsync(system, messages, Array.Empty<AgentToolDefinition>(), ct, responseMode: LlmResponseMode.Text);
+        return new AgentTextResult
+        {
+            Text = responseText,
+            TokenUsage = usage,
+        };
     }
 
     private Task<(string Text, AgentLlmUsage? Usage)> CallLlmWithMessagesInternalAsync(
@@ -182,13 +186,14 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
     {
         var http = httpClientFactory.CreateClient("pipelogiq-agent-llm");
         var baseUrl = ResolveLlmApiBaseUrl();
+        var model = ResolveModelForMode(responseMode);
 
         var requestMessages = new List<object> { new { role = "system", content = system } };
         requestMessages.AddRange(messages);
 
         var requestBody = new Dictionary<string, object?>
         {
-            ["model"] = options.LlmModel,
+            ["model"] = model,
             ["messages"] = requestMessages,
             ["stream"] = false,
         };
@@ -226,7 +231,7 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
             toolCallsElement.ValueKind == JsonValueKind.Array &&
             toolCallsElement.GetArrayLength() > 0)
         {
-            return (NormalizeOllamaToolCalls(toolCallsElement, responseMode), null);
+            return (NormalizeOllamaToolCalls(toolCallsElement, responseMode), ExtractOllamaUsage(doc.RootElement, model));
         }
 
         if (!messageElement.TryGetProperty("content", out var contentElement))
@@ -234,7 +239,7 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
             throw new InvalidOperationException("Ollama response did not contain message.content.");
         }
 
-        return (contentElement.GetString() ?? string.Empty, null);
+        return (contentElement.GetString() ?? string.Empty, ExtractOllamaUsage(doc.RootElement, model));
     }
 
     private string ResolveLlmApiBaseUrl()
@@ -281,11 +286,31 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
 
         return new AgentLlmUsage
         {
+            Provider = "Anthropic",
+            Model = model,
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             CacheCreationTokens = cacheCreate,
             CacheReadTokens = cacheRead,
             EstimatedCostUsd = cost,
+        };
+    }
+
+    private static AgentLlmUsage? ExtractOllamaUsage(JsonElement root, string model)
+    {
+        var hasPrompt = root.TryGetProperty("prompt_eval_count", out var promptEval) && promptEval.ValueKind == JsonValueKind.Number;
+        var hasCompletion = root.TryGetProperty("eval_count", out var evalCount) && evalCount.ValueKind == JsonValueKind.Number;
+
+        if (!hasPrompt && !hasCompletion)
+            return null;
+
+        return new AgentLlmUsage
+        {
+            Provider = "Ollama",
+            Model = model,
+            InputTokens = hasPrompt ? promptEval.GetInt32() : 0,
+            OutputTokens = hasCompletion ? evalCount.GetInt32() : 0,
+            EstimatedCostUsd = 0m,
         };
     }
 

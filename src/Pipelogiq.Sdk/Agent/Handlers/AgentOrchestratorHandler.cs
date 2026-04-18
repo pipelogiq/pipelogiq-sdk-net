@@ -63,7 +63,10 @@ public class AgentOrchestratorHandler(
             };
             context.LogInfo("ReAct mode enabled. Initial think stage prepared in stage result.");
 
-            return StageResult.Success("ReAct mode: think stage appended. Loop begins.", reactStages);
+            var output = AgentUsageContextHelper.BuildStageOutput(
+                "ReAct mode: think stage appended. Loop begins.",
+                context);
+            return StageResult.Success(output, reactStages);
         }
 
         // Plan-and-execute mode: LLM plans all tool calls upfront
@@ -80,6 +83,8 @@ public class AgentOrchestratorHandler(
                 $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
         }
 
+        AgentUsageContextHelper.RecordLlmCall(context, plan.TokenUsage);
+
         if (!plan.HasToolCalls)
         {
             if (!string.IsNullOrWhiteSpace(plan.DirectAnswer))
@@ -87,7 +92,12 @@ public class AgentOrchestratorHandler(
             context.LogInfo("Planner returned direct answer. Appending responder only.");
 
             var responderStages = await AppendStagesAsync(pipelineId, new List<AgentToolCall>(), context, ct: default);
-            return StageResult.Success("No tools needed; responder appended.", responderStages);
+            var output = AgentUsageContextHelper.BuildStageOutput(
+                "No tools needed; responder appended.",
+                context,
+                plan.TokenUsage,
+                "plan");
+            return StageResult.Success(output, responderStages);
         }
 
         var readOnlyCalls = plan.ToolCalls.Where(c => !IsToolMutating(c.Tool)).ToList();
@@ -97,9 +107,12 @@ public class AgentOrchestratorHandler(
 
         var plannedStages = await AppendStagesAsync(pipelineId, readOnlyCalls, mutatingCalls, context, ct: default);
 
-        return StageResult.Success(
+        var plannedOutput = AgentUsageContextHelper.BuildStageOutput(
             $"Agent plan built: {plan.ToolCalls.Count} tool call(s) appended as stages.",
-            plannedStages);
+            context,
+            plan.TokenUsage,
+            "plan");
+        return StageResult.Success(plannedOutput, plannedStages);
     }
 
     private bool IsToolMutating(string toolName)

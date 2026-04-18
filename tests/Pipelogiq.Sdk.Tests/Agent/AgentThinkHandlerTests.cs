@@ -133,7 +133,7 @@ public sealed class AgentThinkHandlerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenToolLoopDetected_AppendsSingleResponderAndReturnsSuccessfulTerminalResult()
+    public async Task ExecuteAsync_WhenToolLoopDetected_AppendsSingleResponderAndReturnsFailedTerminalResult()
     {
         var handler = new CapturingThinkHandler(
             new StaticPlanner(new AgentThinkDecision { Action = AgentThinkAction.Done, FinalAnswer = "unused" }),
@@ -160,12 +160,14 @@ public sealed class AgentThinkHandlerTests
 
         var result = await handler.ExecuteAsync(context);
 
-        Assert.True(result.IsSuccess);
+        Assert.False(result.IsSuccess);
         Assert.Equal("TOOL_LOOP", result.ErrorCode);
         Assert.Single(handler.LastAppendedStages);
         Assert.Equal("agent:responder", handler.LastAppendedStages[0].StageName);
         Assert.True(handler.LastAppendedStages[0].Options?.RunNextIfFailed);
         Assert.True(context.Payload!.ContainsKey("agent:responderAppended"));
+        Assert.Equal(true, context.Payload["agent:terminalFailure"]);
+        Assert.Equal("TOOL_LOOP", context.Payload["agent:terminalFailureCode"]);
     }
 
     [Fact]
@@ -336,12 +338,12 @@ public sealed class AgentThinkHandlerTests
             return Task.FromResult(new AgentPlan());
         }
 
-        public Task<string> SynthesizeAsync(
+        public Task<AgentTextResult> SynthesizeAsync(
             string originalMessage,
             IReadOnlyList<AgentToolResult> results,
             CancellationToken ct = default)
         {
-            return Task.FromResult("done");
+            return Task.FromResult(new AgentTextResult { Text = "done" });
         }
 
         public Task<AgentThinkDecision> ThinkAsync(
