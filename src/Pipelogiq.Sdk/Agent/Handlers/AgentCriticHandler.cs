@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using PipelogiqSDK.Abstractions;
+using PipelogiqSDK.Agent;
 using PipelogiqSDK.Agent.Configuration;
 using PipelogiqSDK.Agent.Models;
 using PipelogiqSDK.Agent.Services;
@@ -87,6 +88,13 @@ public class AgentCriticHandler(
         var nextRejectionCount = rejectionCount + 1;
         if (nextRejectionCount > criticSettings.MaxRejectionsPerStep)
         {
+            if (ShouldFailClosedOnCriticCap(proposal))
+            {
+                context.LogWarning(
+                    $"Critic rejection cap reached [cap={criticSettings.MaxRejectionsPerStep}] for incomplete saveBudgetResult proposal — refusing to auto-approve.");
+                return await FailClosedAsync(pipelineId, proposal, verdict, context);
+            }
+
             context.LogWarning(
                 $"Critic rejection cap reached [cap={criticSettings.MaxRejectionsPerStep}] — approving proposal to make forward progress.");
             return await ApproveAndScheduleAsync(pipelineId, proposal, context);
@@ -172,6 +180,38 @@ public class AgentCriticHandler(
             $"Critic rejected (rejection {nextRejectionCount}) — looping back to think with feedback.");
     }
 
+    private async Task<IStageResult> FailClosedAsync(
+        int pipelineId,
+        AgentThinkDecision proposal,
+        AgentCriticVerdict verdict,
+        IStageContext context)
+    {
+        ClearCriticState(context);
+
+        var history = context.TryGetValue<List<AgentConversationTurn>>(AgentConstants.ConversationHistory) ?? new();
+        var feedbackBody = BuildCriticFeedbackBody(proposal, verdict);
+        history.Add(new AgentConversationTurn
+        {
+            Type = "critic_feedback",
+            Content = feedbackBody,
+        });
+        SetContextValue(context, AgentConstants.ConversationHistory, history);
+
+        var feedback = string.IsNullOrWhiteSpace(verdict.Feedback)
+            ? "The critic repeatedly rejected the proposed save operation because the budget sheet was incomplete."
+            : verdict.Feedback!;
+
+        SetContextValue(
+            context,
+            "agent:directAnswer",
+            $"I couldn't save the budget because the generated proposal still lacked structured line items. {feedback}");
+        SetContextValue(context, AgentConstants.ResponderAppended, true);
+
+        await AppendStagesAsync(pipelineId, [BuildResponderStage()]);
+        return StageResult.Success(
+            "Critic rejection cap reached for incomplete saveBudgetResult — responder appended without saving.");
+    }
+
     private static string BuildCriticFeedbackBody(AgentThinkDecision proposal, AgentCriticVerdict verdict)
     {
         var feedback = JsonSerializer.Serialize(new
@@ -184,6 +224,42 @@ public class AgentCriticHandler(
             instruction = "A second-model reviewer rejected your previous proposal. Read the feedback and concerns, revise your plan, and emit a new decision. Do not repeat the rejected action without addressing every concern.",
         });
         return feedback;
+    }
+
+    private static bool ShouldFailClosedOnCriticCap(AgentThinkDecision proposal) =>
+        proposal.Action == AgentThinkAction.CallTool &&
+        proposal.ToolCall != null &&
+        string.Equals(proposal.ToolCall.Tool, "saveBudgetResult", StringComparison.OrdinalIgnoreCase) &&
+        !HasExplicitBudgetRows(proposal.ToolCall.Params);
+
+    private static bool HasExplicitBudgetRows(IReadOnlyDictionary<string, object?>? parameters)
+    {
+        if (parameters == null || parameters.Count == 0)
+            return false;
+
+        foreach (var key in new[] { "lineItems", "items", "budgetRows", "rows" })
+        {
+            if (!parameters.TryGetValue(key, out var value) || value == null)
+                continue;
+
+            if (value is JsonElement json &&
+                ((json.ValueKind == JsonValueKind.Array && json.GetArrayLength() > 0) ||
+                 (json.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(json.GetString()))))
+            {
+                return true;
+            }
+
+            if (value is string text && !string.IsNullOrWhiteSpace(text))
+                return true;
+
+            if (value is System.Collections.IEnumerable seq && value is not string)
+            {
+                foreach (var _ in seq)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     // ── Stage builders ───────────────────────────────────────────────────────
