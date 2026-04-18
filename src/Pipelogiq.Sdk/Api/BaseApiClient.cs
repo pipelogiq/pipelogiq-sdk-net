@@ -79,7 +79,7 @@ public abstract class BaseApiClient
         CancellationToken ct = default,
         IReadOnlyDictionary<string, string>? headers = null)
     {
-        var payload = new StringContent(JsonConvert.SerializeObject(content), Encoding.UTF8, "application/json");
+        var payload = new StringContent(SdkJsonSerializer.Serialize(content), Encoding.UTF8, "application/json");
         using var request = BuildRequest(HttpMethod.Post, requestUri, payload, headers);
         using var response = await _httpClient.SendAsync(request, ct);
         await EnsureSuccess(response);
@@ -100,7 +100,7 @@ public abstract class BaseApiClient
         CancellationToken ct = default,
         IReadOnlyDictionary<string, string>? headers = null)
     {
-        var payload = new StringContent(JsonConvert.SerializeObject(content), Encoding.UTF8, "application/json");
+        var payload = new StringContent(SdkJsonSerializer.Serialize(content), Encoding.UTF8, "application/json");
         using var request = BuildRequest(HttpMethod.Post, requestUri, payload, headers);
         using var response = await _httpClient.SendAsync(request, ct);
         await EnsureSuccess(response);
@@ -121,7 +121,7 @@ public abstract class BaseApiClient
         CancellationToken ct = default,
         IReadOnlyDictionary<string, string>? headers = null)
     {
-        var payload = new StringContent(JsonConvert.SerializeObject(content), Encoding.UTF8, "application/json");
+        var payload = new StringContent(SdkJsonSerializer.Serialize(content), Encoding.UTF8, "application/json");
         using var request = BuildRequest(HttpMethod.Put, requestUri, payload, headers);
         using var response = await _httpClient.SendAsync(request, ct);
         await EnsureSuccess(response);
