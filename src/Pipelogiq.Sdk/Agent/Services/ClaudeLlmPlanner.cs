@@ -733,6 +733,7 @@ Response body:
         foreach (var tool in tools)
         {
             var (properties, required) = BuildToolSchema(tool, BuildOllamaToolParameter);
+            var description = BuildToolDescription(tool);
 
             ollamaTools.Add(new
             {
@@ -740,7 +741,7 @@ Response body:
                 function = new
                 {
                     name = tool.Name,
-                    description = tool.Description,
+                    description,
                     parameters = new
                     {
                         type = "object",
@@ -763,13 +764,14 @@ Response body:
             var tool = tools[i];
             var (properties, required) = BuildToolSchema(tool, BuildAnthropicToolParameter);
             var isLast = addCacheControlToLast && i == tools.Count - 1;
+            var description = BuildToolDescription(tool);
 
             if (isLast)
             {
                 anthropicTools.Add(new
                 {
                     name = tool.Name,
-                    description = tool.Description,
+                    description,
                     input_schema = new
                     {
                         type = "object",
@@ -784,7 +786,7 @@ Response body:
                 anthropicTools.Add(new
                 {
                     name = tool.Name,
-                    description = tool.Description,
+                    description,
                     input_schema = new
                     {
                         type = "object",
@@ -843,8 +845,11 @@ Response body:
         if (param.EnumValues is { Length: > 0 })
             schema["enum"] = param.EnumValues;
 
-        if (!string.IsNullOrWhiteSpace(param.Example))
-            schema["example"] = param.Example;
+        if (TryBuildParameterExample(param, out var example))
+            schema["example"] = example;
+
+        if (TryBuildArrayItemsSchema(param, out var itemsSchema))
+            schema["items"] = itemsSchema;
 
         return schema;
     }
@@ -860,10 +865,79 @@ Response body:
         if (param.EnumValues is { Length: > 0 })
             schema["enum"] = param.EnumValues;
 
-        if (!string.IsNullOrWhiteSpace(param.Example))
-            schema["examples"] = new[] { param.Example };
+        if (TryBuildParameterExample(param, out var example))
+            schema["examples"] = new[] { example };
+
+        if (TryBuildArrayItemsSchema(param, out var itemsSchema))
+            schema["items"] = itemsSchema;
 
         return schema;
+    }
+
+    private static string BuildToolDescription(AgentToolDefinition tool)
+    {
+        var sb = new StringBuilder(tool.Description ?? string.Empty);
+
+        if (tool.BodyExample != null)
+            sb.AppendLine().Append("Example request body: ").Append(SerializeExample(tool.BodyExample));
+
+        if (tool.ResponseExample != null)
+            sb.AppendLine().Append("Example response body: ").Append(SerializeExample(tool.ResponseExample));
+
+        return sb.ToString();
+    }
+
+    private static bool TryBuildParameterExample(AgentToolParam param, out object? example)
+    {
+        example = null;
+        if (string.IsNullOrWhiteSpace(param.Example))
+            return false;
+
+        var normalizedType = (param.Type ?? "string").ToLowerInvariant();
+        if (normalizedType is "array" or "object" && TryParseJsonLiteral(param.Example!, out var parsed))
+        {
+            example = parsed;
+            return true;
+        }
+
+        example = param.Example;
+        return true;
+    }
+
+    private static bool TryBuildArrayItemsSchema(AgentToolParam param, out Dictionary<string, object?>? itemsSchema)
+    {
+        itemsSchema = null;
+        if (!string.Equals(param.Type, "array", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        itemsSchema = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["type"] = "object",
+        };
+
+        if (!string.IsNullOrWhiteSpace(param.ItemsDescription))
+            itemsSchema["description"] = param.ItemsDescription;
+
+        return true;
+    }
+
+    private static bool TryParseJsonLiteral(string raw, out object? parsed)
+    {
+        parsed = null;
+        try
+        {
+            parsed = JsonSerializer.Deserialize<object>(raw);
+            return parsed != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string SerializeExample(object value)
+    {
+        return JsonSerializer.Serialize(value);
     }
 
     private static IEnumerable<string> ResolveLegacyToolParameters(AgentToolDefinition tool)

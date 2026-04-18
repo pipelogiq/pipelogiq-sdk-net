@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.9] - 2026-04-18
+
+### Fixed
+
+- **JsonElement serialization in BaseApiClient** — `PostAsync`/`PutAsync` now use `SdkJsonSerializer` with custom Newtonsoft converters for `System.Text.Json.JsonElement` and `JsonDocument`. Previously, `JsonConvert.SerializeObject` serialized `JsonElement` structs as POCOs (`{ "ValueKind": 3 }`) instead of their actual JSON values, causing all agent tool calls via `AppendAgentStagesAsync` to fail with type mismatch errors (e.g. "parameter 'projectId' must be a string")
+
 ## [0.3.0-preview.6] - 2026-04-17
 
 ### Added
