@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <VersionPrefix>0.3.2-preview.3</VersionPrefix>
+    <VersionPrefix>0.3.2-preview.4</VersionPrefix>
     <Authors>Pipelogiq</Authors>
     <Company>Pipelogiq</Company>
     <RepositoryUrl>https://github.com/pipelogiq/pipelogiq-sdk-net</RepositoryUrl>

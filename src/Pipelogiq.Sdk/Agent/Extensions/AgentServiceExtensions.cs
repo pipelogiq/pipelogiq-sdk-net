@@ -82,7 +82,12 @@ public static class AgentServiceExtensions
         services.TryAddSingleton<ClaudeCritic>();
         services.TryAddSingleton<IAgentCriticResolver, DefaultAgentCriticResolver>();
 
-        services.AddHttpClient("pipelogiq-agent-llm");
+        services.AddHttpClient("pipelogiq-agent-llm", client =>
+        {
+            client.Timeout = options.LlmRequestTimeout > TimeSpan.Zero
+                ? options.LlmRequestTimeout
+                : TimeSpan.FromMinutes(5);
+        });
         services.AddHttpClient("pipelogiq-agent-api", client =>
         {
             if (!string.IsNullOrWhiteSpace(options.TargetApiBaseUrl))

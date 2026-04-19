@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-preview.4] - 2026-04-19
+
+### Fixed
+
+- Built-in LLM HTTP clients now use `AgentOptions.LlmRequestTimeout` and default to 5 minutes instead of the .NET `HttpClient` default of 100 seconds, preventing long-running `agent:think` and critic calls from being cut off prematurely.
+
+### Changed
+
+- Release metadata, README status badges, and package version references now point to `0.3.2-preview.4`.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.2-preview.4` for this branch state.
+
 ## [0.3.2-preview.3] - 2026-04-19
 
 ### Fixed
@@ -222,7 +236,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.3...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.4...HEAD
+[0.3.2-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.4
 [0.3.2-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.3
 [0.3.2-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.2
 [0.3.2-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.1

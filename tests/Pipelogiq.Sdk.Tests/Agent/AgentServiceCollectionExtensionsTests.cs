@@ -157,4 +157,23 @@ public sealed class AgentServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         Assert.NotNull(provider.GetService<ILlmPlanner>());
     }
+
+    [Fact]
+    public void AddPipelogiqAgent_ConfiguresLlmHttpClientTimeout()
+    {
+        var services = new ServiceCollection();
+
+        services.AddPipelogiqAgent(options =>
+        {
+            options.LlmApiKey = "llm-key";
+            options.LlmRequestTimeout = TimeSpan.FromMinutes(7);
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var factory = provider.GetRequiredService<IHttpClientFactory>();
+        var client = factory.CreateClient("pipelogiq-agent-llm");
+
+        Assert.Equal(TimeSpan.FromMinutes(7), client.Timeout);
+    }
 }

@@ -26,6 +26,13 @@ public class AgentOptions
     public string LlmApiBaseUrl { get; set; } = "https://api.anthropic.com";
 
     /// <summary>
+    /// HTTP timeout used by the built-in LLM clients (Anthropic, OpenAI, Ollama, and critic transports).
+    /// The default is 5 minutes so long-running think steps do not get cut off by the .NET HttpClient
+    /// default timeout of 100 seconds.
+    /// </summary>
+    public TimeSpan LlmRequestTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// System prompt prepended to every LLM conversation.
     /// Describe the domain and any rules the agent should follow.
     /// </summary>
