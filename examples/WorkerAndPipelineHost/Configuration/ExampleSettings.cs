@@ -17,6 +17,8 @@ internal sealed class ExampleSettings
     public string? AgentLlmApiKey { get; init; }
     public string AgentLlmModel { get; init; } = "claude-opus-4-6";
     public string AgentLlmApiBaseUrl { get; init; } = "https://api.anthropic.com";
+    public AgentLlmStepRouter? AgentStepRouter { get; init; }
+    public AgentProviderCatalog AgentProviders { get; init; } = new();
     public int AgentAnthropicMaxTokens { get; init; } = 4096;
     public int? AgentOllamaContextWindow { get; init; }
     public int? AgentOllamaMaxOutputTokens { get; init; }

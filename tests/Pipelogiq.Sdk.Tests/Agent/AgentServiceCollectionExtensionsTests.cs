@@ -126,4 +126,35 @@ public sealed class AgentServiceCollectionExtensionsTests
         Assert.Equal("gemma3", options.LlmModel);
         Assert.NotNull(provider.GetService<ILlmPlanner>());
     }
+
+    [Fact]
+    public void AddPipelogiqAgent_StepRouterWithOpenAiCatalog_RegistersBuiltInPlanner()
+    {
+        var services = new ServiceCollection();
+
+        services.AddPipelogiqAgent(options =>
+        {
+            options.LlmProvider = AgentLlmProvider.Anthropic;
+            options.LlmModel = "claude-sonnet-4-6";
+            options.StepRouter = new AgentLlmStepRouter
+            {
+                Think = new AgentLlmStepRoute
+                {
+                    Provider = AgentLlmProvider.OpenAI,
+                    Model = "gpt-4.1-mini"
+                }
+            };
+            options.Providers = new AgentProviderCatalog
+            {
+                OpenAI = new AgentProviderConnection
+                {
+                    ApiKey = "openai-key",
+                    ApiBaseUrl = "https://api.openai.com"
+                }
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetService<ILlmPlanner>());
+    }
 }

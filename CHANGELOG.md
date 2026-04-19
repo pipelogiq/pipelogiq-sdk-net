@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-preview.1] - 2026-04-19
+
+### Added
+
+- Built-in agent planner support for `OpenAI` as a primary provider via Chat Completions, alongside existing Anthropic and Ollama transports.
+- New `AgentLlmStepRouter`, `AgentLlmStepRoute`, and provider-catalog configuration so `Plan`, `Think`, `Synthesize`, and `Critic` steps can each target different providers and models without placing secrets in per-run overrides.
+
+### Changed
+
+- `AgentRunOverrides` now supports non-secret per-run step routing overrides through `StepRouter`, while worker-owned provider credentials remain in `AgentOptions.Providers`.
+- Worker and agent documentation now includes OpenAI primary-provider examples and mixed-provider step-routing guidance.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.2-preview.1` for this branch state.
+
 ## [0.3.1-preview.4] - 2026-04-18
 
 ### Added
@@ -177,7 +193,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.1-preview.4...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.1...HEAD
+[0.3.2-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.1
 [0.3.1-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.4
 [0.3.1-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.3
 [0.3.1-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.2

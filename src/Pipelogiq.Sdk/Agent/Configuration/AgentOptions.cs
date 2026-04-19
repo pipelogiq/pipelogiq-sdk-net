@@ -84,6 +84,19 @@ public class AgentOptions
     public AgentModelRouter? ModelRouter { get; set; }
 
     /// <summary>
+    /// Per-step provider/model routing. Use this when different logical agent steps
+    /// should run on different vendors or models.
+    /// </summary>
+    public AgentLlmStepRouter? StepRouter { get; set; }
+
+    /// <summary>
+    /// Worker-owned provider credentials and endpoint overrides for additional providers.
+    /// This is especially useful when step routing mixes Anthropic, OpenAI, and Ollama
+    /// within the same agent.
+    /// </summary>
+    public AgentProviderCatalog Providers { get; set; } = new();
+
+    /// <summary>
     /// Token budget and cost controls. Enables prompt caching and optional per-session limits.
     /// </summary>
     public AgentTokenBudget TokenBudget { get; set; } = new();
@@ -193,6 +206,12 @@ public class AgentModelRouter
     /// A cheaper model is usually sufficient. Example: "claude-haiku-4-5-20251001".
     /// </summary>
     public string? SynthesizeModel { get; set; }
+
+    /// <summary>
+    /// Model used for the optional critic step.
+    /// Falls back to <see cref="AgentCriticOptions.Model"/> when unset.
+    /// </summary>
+    public string? CriticModel { get; set; }
 }
 
 /// <summary>

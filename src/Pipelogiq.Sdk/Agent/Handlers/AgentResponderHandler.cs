@@ -1,4 +1,5 @@
 using PipelogiqSDK.Abstractions;
+using PipelogiqSDK.Agent.Configuration;
 using PipelogiqSDK.Agent.Models;
 using PipelogiqSDK.Agent.Services;
 using PipelogiqSDK.StageHelper;
@@ -37,6 +38,7 @@ public class AgentResponderHandler(
             context.LogInfo($"Responder synthesizing final message from {toolResults.Count} tool result(s).");
             if (toolResults.Count > 0)
             {
+                using var _ = AgentLlmRuntime.PushRunOverrides(AgentLlmRuntime.GetRunOverrides(context));
                 var synthResult = await llmPlanner.SynthesizeAsync(originalMessage, toolResults);
                 responseText = synthResult.Text;
                 synthUsage = synthResult.TokenUsage;
@@ -81,15 +83,6 @@ public class AgentResponderHandler(
             {
                 // Observer errors are intentionally swallowed — they must never affect agent flow
             }
-        }
-
-        var terminalFailure = context.TryGetValue<bool>(AgentConstants.TerminalFailure);
-        if (terminalFailure)
-        {
-            var errorCode = context.TryGetValue<string>(AgentConstants.TerminalFailureCode);
-            return StageResult.Error(
-                output,
-                string.IsNullOrWhiteSpace(errorCode) ? "AGENT_TERMINAL_FAILURE" : errorCode);
         }
 
         return result;

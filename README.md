@@ -1,9 +1,9 @@
 # Pipelogiq .NET SDK
 
-![Status: Preview v0.3.1-preview.4](https://img.shields.io/badge/status-Preview%20v0.3.1--preview.4-orange)
+![Status: Preview v0.3.2-preview.1](https://img.shields.io/badge/status-Preview%20v0.3.2--preview.1-orange)
 
 Pipelogiq .NET SDK provides the .NET worker runtime and API client helpers for Pipelogiq pipelines.
-This repository is currently shipping **v0.3.1-preview.4** packages focused on execution, transport, integration primitives, and AI agent workflows.
+This repository is currently shipping **v0.3.2-preview.1** packages focused on execution, transport, integration primitives, and AI agent workflows.
 APIs may change while the SDK is still stabilizing.
 
 ## Installation
@@ -81,7 +81,8 @@ See `docs/tracing-opentelemetry.md` for examples.
 ## AI Agent (Preview)
 
 The SDK includes optional AI agent handlers that can orchestrate tool calls as pipeline stages.
-See `docs/ai-agent.md` for setup, confirmation flow, and security notes.
+The built-in planner supports Anthropic, OpenAI, and Ollama, including step-level provider/model routing for `Plan`, `Think`, `Synthesize`, and `Critic`.
+See `docs/ai-agent.md` for setup, routing, confirmation flow, and security notes.
 
 ## Compatibility
 

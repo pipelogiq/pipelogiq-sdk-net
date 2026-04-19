@@ -160,6 +160,7 @@ public class AgentThinkHandler(
 
         // Recall long-term memories and inject context values into system prompt
         var systemPrompt = await BuildSystemPromptWithMemoryAsync(originalMessage, context);
+        var runOverrides = AgentLlmRuntime.GetRunOverrides(context);
 
         // Attachments (images, PDFs) are only relevant on the first think step.
         // On subsequent steps the conversation history already carries full context.
@@ -170,6 +171,7 @@ public class AgentThinkHandler(
         AgentThinkDecision decision;
         try
         {
+            using var _ = AgentLlmRuntime.PushRunOverrides(runOverrides);
             decision = await llmPlanner.ThinkAsync(
                 originalMessage,
                 history,

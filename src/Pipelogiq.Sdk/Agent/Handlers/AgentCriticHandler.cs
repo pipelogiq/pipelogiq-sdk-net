@@ -54,7 +54,7 @@ public class AgentCriticHandler(
         }
 
         var criticMode = AgentCriticRuntime.ResolveMode(context, agentOptions);
-        var criticSettings = agentOptions.Critic;
+        var criticSettings = AgentLlmRuntime.ResolveCriticOptions(context, agentOptions);
         var history = context.TryGetValue<List<AgentConversationTurn>>(AgentConstants.ConversationHistory) ?? new();
         var originalMessage = context.TryGetValue<string>(AgentConstants.OriginalMessage) ?? string.Empty;
         var tools = toolRegistry.GetAll();

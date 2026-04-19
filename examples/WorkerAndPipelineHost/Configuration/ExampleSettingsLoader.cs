@@ -9,6 +9,7 @@ internal static class ExampleSettingsLoader
         var mode = ParseMode(args);
         var apiKey = Environment.GetEnvironmentVariable("PIPELOGIQ_API_KEY");
         var llmProvider = ParseLlmProvider(Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_LLM_PROVIDER"));
+        var primaryApiKey = ResolvePrimaryLlmApiKey(llmProvider);
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
@@ -32,12 +33,34 @@ internal static class ExampleSettingsLoader
                 variableName: "PIPELOGIQ_TELEGRAM_POLL_TIMEOUT_SECONDS"),
             TelegramAllowedChatIds = ParseLongList(Environment.GetEnvironmentVariable("PIPELOGIQ_TELEGRAM_ALLOWED_CHAT_IDS")),
             AgentLlmProvider = llmProvider,
-            AgentLlmApiKey = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_LLM_API_KEY")
-                             ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"),
+            AgentLlmApiKey = primaryApiKey,
             AgentLlmModel = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_LLM_MODEL")
                             ?? GetDefaultLlmModel(llmProvider),
             AgentLlmApiBaseUrl = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_LLM_API_BASE_URL")
                                  ?? GetDefaultLlmApiBaseUrl(llmProvider),
+            AgentStepRouter = BuildStepRouterFromEnvironment(),
+            AgentProviders = new AgentProviderCatalog
+            {
+                Anthropic = new AgentProviderConnection
+                {
+                    ApiKey = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_ANTHROPIC_API_KEY")
+                             ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"),
+                    ApiBaseUrl = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_ANTHROPIC_API_BASE_URL")
+                                 ?? GetDefaultLlmApiBaseUrl(AgentLlmProvider.Anthropic),
+                },
+                OpenAI = new AgentProviderConnection
+                {
+                    ApiKey = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_OPENAI_API_KEY")
+                             ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY"),
+                    ApiBaseUrl = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_OPENAI_API_BASE_URL")
+                                 ?? GetDefaultLlmApiBaseUrl(AgentLlmProvider.OpenAI),
+                },
+                Ollama = new AgentProviderConnection
+                {
+                    ApiBaseUrl = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_OLLAMA_API_BASE_URL")
+                                 ?? GetDefaultLlmApiBaseUrl(AgentLlmProvider.Ollama),
+                },
+            },
             AgentAnthropicMaxTokens = ParseInt(
                 Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_ANTHROPIC_MAX_TOKENS"),
                 fallback: 4096,
@@ -66,7 +89,7 @@ internal static class ExampleSettingsLoader
             string.IsNullOrWhiteSpace(settings.AgentLlmApiKey))
         {
             throw new InvalidOperationException(
-                "Telegram channel is enabled. Set PIPELOGIQ_AGENT_LLM_API_KEY (or ANTHROPIC_API_KEY), or switch PIPELOGIQ_AGENT_LLM_PROVIDER=Ollama.");
+                "Telegram channel is enabled. Set PIPELOGIQ_AGENT_LLM_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, or switch PIPELOGIQ_AGENT_LLM_PROVIDER=Ollama.");
         }
 
         return settings;
@@ -159,9 +182,10 @@ internal static class ExampleSettingsLoader
         return value.Trim().ToLowerInvariant() switch
         {
             "anthropic" or "claude" => AgentLlmProvider.Anthropic,
+            "openai" or "gpt" => AgentLlmProvider.OpenAI,
             "ollama" => AgentLlmProvider.Ollama,
             _ => throw new InvalidOperationException(
-                $"Unsupported PIPELOGIQ_AGENT_LLM_PROVIDER value '{value}'. Use 'Anthropic' or 'Ollama'.")
+                $"Unsupported PIPELOGIQ_AGENT_LLM_PROVIDER value '{value}'. Use 'Anthropic', 'OpenAI', or 'Ollama'.")
         };
     }
 
@@ -170,6 +194,7 @@ internal static class ExampleSettingsLoader
         return provider switch
         {
             AgentLlmProvider.Ollama => "gemma3",
+            AgentLlmProvider.OpenAI => "gpt-4.1-mini",
             _ => "claude-opus-4-6",
         };
     }
@@ -179,7 +204,55 @@ internal static class ExampleSettingsLoader
         return provider switch
         {
             AgentLlmProvider.Ollama => "http://localhost:11434",
+            AgentLlmProvider.OpenAI => "https://api.openai.com",
             _ => "https://api.anthropic.com",
+        };
+    }
+
+    private static string? ResolvePrimaryLlmApiKey(AgentLlmProvider provider)
+    {
+        var generic = Environment.GetEnvironmentVariable("PIPELOGIQ_AGENT_LLM_API_KEY");
+        if (!string.IsNullOrWhiteSpace(generic))
+            return generic;
+
+        return provider switch
+        {
+            AgentLlmProvider.OpenAI => Environment.GetEnvironmentVariable("OPENAI_API_KEY"),
+            AgentLlmProvider.Anthropic => Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"),
+            _ => null,
+        };
+    }
+
+    private static AgentLlmStepRouter? BuildStepRouterFromEnvironment()
+    {
+        var router = new AgentLlmStepRouter
+        {
+            Plan = BuildStepRoute("PLAN"),
+            Think = BuildStepRoute("THINK"),
+            Synthesize = BuildStepRoute("SYNTHESIZE"),
+            Critic = BuildStepRoute("CRITIC"),
+        };
+
+        return router.Plan == null &&
+               router.Think == null &&
+               router.Synthesize == null &&
+               router.Critic == null
+            ? null
+            : router;
+    }
+
+    private static AgentLlmStepRoute? BuildStepRoute(string step)
+    {
+        var providerValue = Environment.GetEnvironmentVariable($"PIPELOGIQ_AGENT_{step}_PROVIDER");
+        var model = Environment.GetEnvironmentVariable($"PIPELOGIQ_AGENT_{step}_MODEL");
+
+        if (string.IsNullOrWhiteSpace(providerValue) && string.IsNullOrWhiteSpace(model))
+            return null;
+
+        return new AgentLlmStepRoute
+        {
+            Provider = string.IsNullOrWhiteSpace(providerValue) ? null : ParseLlmProvider(providerValue),
+            Model = string.IsNullOrWhiteSpace(model) ? null : model,
         };
     }
 }

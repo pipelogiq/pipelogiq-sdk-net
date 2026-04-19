@@ -24,10 +24,17 @@ It is organized into separate folders for handlers, services, hosted services, m
 - `PIPELOGIQ_TELEGRAM_BOT_TOKEN` (optional; enables Telegram channel listener in `worker` mode)
 - `PIPELOGIQ_TELEGRAM_ALLOWED_CHAT_IDS` (optional CSV of chat ids, e.g. `123456789,-1001122334455`)
 - `PIPELOGIQ_TELEGRAM_POLL_TIMEOUT_SECONDS` (optional, default `25`)
-- `PIPELOGIQ_AGENT_LLM_PROVIDER` (optional, `Anthropic` or `Ollama`; default `Anthropic`)
-- `PIPELOGIQ_AGENT_LLM_API_KEY` (required for Anthropic when Telegram channel is enabled; fallback: `ANTHROPIC_API_KEY`)
-- `PIPELOGIQ_AGENT_LLM_MODEL` (optional, default `claude-opus-4-6` for Anthropic, `gemma3` for Ollama)
-- `PIPELOGIQ_AGENT_LLM_API_BASE_URL` (optional, default `https://api.anthropic.com` for Anthropic, `http://localhost:11434` for Ollama)
+- `PIPELOGIQ_AGENT_LLM_PROVIDER` (optional, `Anthropic`, `OpenAI`, or `Ollama`; default `Anthropic`)
+- `PIPELOGIQ_AGENT_LLM_API_KEY` (optional generic key for the primary provider; fallback: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` depending on `PIPELOGIQ_AGENT_LLM_PROVIDER`)
+- `PIPELOGIQ_AGENT_LLM_MODEL` (optional, default `claude-opus-4-6` for Anthropic, `gpt-4.1-mini` for OpenAI, `gemma3` for Ollama)
+- `PIPELOGIQ_AGENT_LLM_API_BASE_URL` (optional, default `https://api.anthropic.com` for Anthropic, `https://api.openai.com` for OpenAI, `http://localhost:11434` for Ollama)
+- `PIPELOGIQ_AGENT_ANTHROPIC_API_KEY` / `PIPELOGIQ_AGENT_ANTHROPIC_API_BASE_URL` (optional provider-catalog overrides for routed Anthropic steps)
+- `PIPELOGIQ_AGENT_OPENAI_API_KEY` / `PIPELOGIQ_AGENT_OPENAI_API_BASE_URL` (optional provider-catalog overrides for routed OpenAI steps)
+- `PIPELOGIQ_AGENT_OLLAMA_API_BASE_URL` (optional provider-catalog override for routed Ollama steps)
+- `PIPELOGIQ_AGENT_PLAN_PROVIDER` / `PIPELOGIQ_AGENT_PLAN_MODEL` (optional per-step routing override)
+- `PIPELOGIQ_AGENT_THINK_PROVIDER` / `PIPELOGIQ_AGENT_THINK_MODEL` (optional per-step routing override)
+- `PIPELOGIQ_AGENT_SYNTHESIZE_PROVIDER` / `PIPELOGIQ_AGENT_SYNTHESIZE_MODEL` (optional per-step routing override)
+- `PIPELOGIQ_AGENT_CRITIC_PROVIDER` / `PIPELOGIQ_AGENT_CRITIC_MODEL` (optional per-step routing override)
 - `PIPELOGIQ_AGENT_USE_REACT_MODE` (optional, default `true`)
 - `PIPELOGIQ_AGENT_REQUIRE_CONFIRMATION` (optional, default `false`)
 - `PIPELOGIQ_AGENT_SYSTEM_PROMPT` (optional)
@@ -62,6 +69,8 @@ services.AddPipelogiqAgent(agent =>
 {
     agent.LlmProvider = settings.AgentLlmProvider;
     agent.LlmApiKey = settings.AgentLlmApiKey;
+    agent.StepRouter = settings.AgentStepRouter;
+    agent.Providers = settings.AgentProviders;
     agent.UseReActMode = settings.AgentUseReActMode;
 });
 
@@ -80,6 +89,19 @@ services.AddPipelogiqAgent(agent =>
 });
 
 services.AddTelegramAgentChannel("<telegram-bot-token>");
+```
+
+OpenAI primary-provider example:
+
+```bash
+export PIPELOGIQ_API_KEY="<your-api-key>"
+export PIPELOGIQ_API_URL="http://localhost:8081"
+export PIPELOGIQ_TELEGRAM_BOT_TOKEN="<telegram-bot-token>"
+export PIPELOGIQ_AGENT_LLM_PROVIDER="OpenAI"
+export OPENAI_API_KEY="<openai-api-key>"
+export PIPELOGIQ_AGENT_LLM_MODEL="gpt-4.1-mini"
+
+dotnet run --project examples/WorkerAndPipelineHost/Pipelogiq.Sdk.Examples.WorkerAndPipelineHost.csproj -- worker
 ```
 
 Extended registration with explicit options:
@@ -118,6 +140,26 @@ export PIPELOGIQ_TELEGRAM_BOT_TOKEN="<telegram-bot-token>"
 export PIPELOGIQ_AGENT_LLM_PROVIDER="Ollama"
 export PIPELOGIQ_AGENT_LLM_MODEL="gemma3"
 export PIPELOGIQ_AGENT_LLM_API_BASE_URL="http://localhost:11434"
+
+dotnet run --project examples/WorkerAndPipelineHost/Pipelogiq.Sdk.Examples.WorkerAndPipelineHost.csproj -- worker
+```
+
+Mixed-provider step routing example:
+
+```bash
+export PIPELOGIQ_API_KEY="<your-api-key>"
+export PIPELOGIQ_API_URL="http://localhost:8081"
+export PIPELOGIQ_TELEGRAM_BOT_TOKEN="<telegram-bot-token>"
+export ANTHROPIC_API_KEY="<anthropic-api-key>"
+export OPENAI_API_KEY="<openai-api-key>"
+export PIPELOGIQ_AGENT_LLM_PROVIDER="Anthropic"
+export PIPELOGIQ_AGENT_LLM_MODEL="claude-sonnet-4-6"
+export PIPELOGIQ_AGENT_PLAN_PROVIDER="OpenAI"
+export PIPELOGIQ_AGENT_PLAN_MODEL="gpt-4.1-mini"
+export PIPELOGIQ_AGENT_SYNTHESIZE_PROVIDER="OpenAI"
+export PIPELOGIQ_AGENT_SYNTHESIZE_MODEL="gpt-4.1-mini"
+export PIPELOGIQ_AGENT_CRITIC_PROVIDER="OpenAI"
+export PIPELOGIQ_AGENT_CRITIC_MODEL="gpt-4.1"
 
 dotnet run --project examples/WorkerAndPipelineHost/Pipelogiq.Sdk.Examples.WorkerAndPipelineHost.csproj -- worker
 ```

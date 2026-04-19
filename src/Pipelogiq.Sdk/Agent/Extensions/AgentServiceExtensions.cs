@@ -95,11 +95,7 @@ public static class AgentServiceExtensions
 
     private static bool ShouldRegisterBuiltInPlanner(AgentOptions options)
     {
-        return options.LlmProvider switch
-        {
-            AgentLlmProvider.Ollama => !string.IsNullOrWhiteSpace(options.LlmModel),
-            _ => !string.IsNullOrWhiteSpace(options.LlmApiKey),
-        };
+        return AgentLlmRuntime.HasAnyBuiltInProviderConfiguration(options);
     }
 }
 

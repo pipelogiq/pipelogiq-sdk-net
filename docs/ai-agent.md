@@ -6,6 +6,12 @@ It uses regular stage handlers (`AgentOrchestratorHandler`, `AgentToolHandler`, 
 - plan-and-execute mode
 - ReAct mode (reason + act loop)
 
+Built-in providers for the default planner are:
+
+- `Anthropic` Messages API
+- `OpenAI` Chat Completions API
+- `Ollama` local chat API
+
 ## Setup
 
 Register Pipelogiq first, then agent services and handlers:
@@ -56,6 +62,28 @@ Register built-in agent handlers in the runner:
 ```csharp
 runner.RegisterAgentHandlers();
 ```
+
+## OpenAI Setup
+
+Use OpenAI as the primary built-in provider when you want the full agent loop to run on Chat Completions:
+
+```csharp
+services.AddPipelogiqAgent(agent =>
+{
+    agent.LlmProvider = AgentLlmProvider.OpenAI;
+    agent.LlmApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+    agent.LlmModel = "gpt-4.1-mini";
+    agent.UseReActMode = true;
+    agent.RequireConfirmationForMutations = true;
+});
+```
+
+The built-in OpenAI path currently:
+
+- uses `POST /v1/chat/completions`
+- supports tool calling
+- supports image attachments
+- does not yet support document attachments in the built-in planner
 
 ## Telegram Channel
 
@@ -122,6 +150,49 @@ services.AddPipelogiqAgent(agent =>
 ```
 
 No `LlmApiKey` is required for a default local Ollama instance.
+
+## Step Routing
+
+Use `AgentLlmStepRouter` when different logical steps should run on different providers or models:
+
+```csharp
+services.AddPipelogiqAgent(agent =>
+{
+    agent.LlmProvider = AgentLlmProvider.Anthropic;
+    agent.LlmApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    agent.LlmModel = "claude-sonnet-4-6";
+
+    agent.StepRouter = new AgentLlmStepRouter
+    {
+        Plan = new AgentLlmStepRoute
+        {
+            Provider = AgentLlmProvider.OpenAI,
+            Model = "gpt-4.1-mini"
+        },
+        Synthesize = new AgentLlmStepRoute
+        {
+            Provider = AgentLlmProvider.OpenAI,
+            Model = "gpt-4.1-mini"
+        },
+        Critic = new AgentLlmStepRoute
+        {
+            Provider = AgentLlmProvider.OpenAI,
+            Model = "gpt-4.1"
+        }
+    };
+
+    agent.Providers = new AgentProviderCatalog
+    {
+        OpenAI = new AgentProviderConnection
+        {
+            ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY"),
+            ApiBaseUrl = "https://api.openai.com"
+        }
+    };
+});
+```
+
+This keeps provider secrets worker-owned. Per-run overrides can change provider/model selection via `AgentRunOverrides.StepRouter`, but should not carry API keys.
 
 ## Native Tools
 
@@ -259,6 +330,8 @@ Then create a retry policy in the dashboard (or via API) targeting the handler:
 This configuration retries up to 6 times with delays of ~2 s, ~4 s, ~8 s, ~16 s, ~32 s, capped at 120 s, with ±10% jitter. Stages that fail for other reasons (e.g. `UPSTREAM_ERROR` or validation failures) are failed immediately without consuming retries.
 
 ## Model Routing
+
+`AgentModelRouter` remains a convenient model-only shortcut when all steps stay on the same provider:
 
 Use `AgentModelRouter` to send different LLM operations to different models — cheaper models for planning and synthesis, full-power model for reasoning:
 

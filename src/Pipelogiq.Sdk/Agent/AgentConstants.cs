@@ -17,6 +17,7 @@ internal static class AgentConstants
     public const string FinalResponse = "agent:finalResponse";
     public const string PendingNotification = "agent:pendingNotification";
     public const string Attachments = "agent:attachments";
+    public const string RunOverrides = "agent:runOverrides";
 
     // ReAct loop context keys
     public const string ConversationHistory = "agent:conversationHistory";

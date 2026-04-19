@@ -39,6 +39,7 @@ public class AgentOrchestratorHandler(
             SetContextValue(context, AgentConstants.Attachments, input.Attachments);
         if (input.RunOverrides != null)
         {
+            SetContextValue(context, AgentConstants.RunOverrides, input.RunOverrides);
             SetContextValue(context, AgentConstants.CriticMode, input.RunOverrides.CriticMode);
             context.LogInfo(
                 $"Per-pipeline overrides applied [criticMode={input.RunOverrides.CriticMode}]");
@@ -74,6 +75,7 @@ public class AgentOrchestratorHandler(
         AgentPlan plan;
         try
         {
+            using var _ = AgentLlmRuntime.PushRunOverrides(input.RunOverrides);
             plan = await llmPlanner.PlanAsync(input.Message, tools, agentOptions.SystemPrompt);
         }
         catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))

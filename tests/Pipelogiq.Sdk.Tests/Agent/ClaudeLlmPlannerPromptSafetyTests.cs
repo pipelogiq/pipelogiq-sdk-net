@@ -713,6 +713,144 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
         Assert.Equal("3", plan.ToolCalls[1].Params["days"]);
     }
 
+    [Fact]
+    public async Task ThinkAsync_WhenUsingOpenAi_UsesChatCompletionsAndParsesNativeToolCalls()
+    {
+        var recordingHandler = new RecordingClaudeHandler(HttpStatusCode.OK, """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                          "name": "get_temperature",
+                          "arguments": "{\"city\":\"Tallinn\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 35
+              }
+            }
+            """);
+        var planner = new ClaudeLlmPlanner(
+            new AgentOptions
+            {
+                LlmProvider = AgentLlmProvider.OpenAI,
+                LlmApiKey = "openai-key",
+                LlmModel = "gpt-4.1-mini",
+                LlmApiBaseUrl = "https://api.openai.com"
+            },
+            new StaticHttpClientFactory(new HttpClient(recordingHandler)));
+
+        var decision = await planner.ThinkAsync(
+            originalMessage: "What is the weather in Tallinn?",
+            history: [],
+            tools:
+            [
+                new AgentToolDefinition
+                {
+                    Name = "get_temperature",
+                    Description = "Get the current temperature for a city",
+                    HttpMethod = "GET",
+                    UrlTemplate = "/weather",
+                    Params = new Dictionary<string, AgentToolParam>
+                    {
+                        ["city"] = new()
+                        {
+                            In = "query",
+                            Type = "string",
+                            Required = true,
+                            Description = "The name of the city"
+                        }
+                    }
+                }
+            ],
+            requireConfirmationForMutations: true,
+            systemPrompt: "You are a weather assistant.");
+
+        Assert.Equal(AgentThinkAction.CallTool, decision.Action);
+        Assert.NotNull(decision.ToolCall);
+        Assert.Equal("get_temperature", decision.ToolCall!.Tool);
+        Assert.Equal("Tallinn", decision.ToolCall.Params["city"]);
+        Assert.NotNull(decision.TokenUsage);
+        Assert.Equal("OpenAI", decision.TokenUsage!.Provider);
+        Assert.Equal("https://api.openai.com/v1/chat/completions", recordingHandler.LastRequestUri);
+
+        using var request = JsonDocument.Parse(recordingHandler.LastRequestBody!);
+        var root = request.RootElement;
+        Assert.Equal("gpt-4.1-mini", root.GetProperty("model").GetString());
+        Assert.Equal(0, root.GetProperty("temperature").GetInt32());
+        var tools = root.GetProperty("tools");
+        Assert.Equal(1, tools.GetArrayLength());
+        Assert.Equal("function", tools[0].GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task ThinkAsync_WhenStepRouterOverridesProvider_UsesPerStepProviderCatalog()
+    {
+        var recordingHandler = new RecordingClaudeHandler(HttpStatusCode.OK, """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "role": "assistant",
+                    "content": "{\"action\":\"done\",\"answer\":\"ok\"}"
+                  }
+                }
+              ]
+            }
+            """);
+        using var _ = AgentLlmRuntime.PushRunOverrides(new AgentRunOverrides
+        {
+            StepRouter = new AgentLlmStepRouter
+            {
+                Think = new AgentLlmStepRoute
+                {
+                    Provider = AgentLlmProvider.OpenAI,
+                    Model = "gpt-4.1-mini"
+                }
+            }
+        });
+        var planner = new ClaudeLlmPlanner(
+            new AgentOptions
+            {
+                LlmProvider = AgentLlmProvider.Anthropic,
+                LlmApiKey = "anthropic-key",
+                LlmModel = "claude-sonnet-4-6",
+                Providers = new AgentProviderCatalog
+                {
+                    OpenAI = new AgentProviderConnection
+                    {
+                        ApiKey = "openai-key",
+                        ApiBaseUrl = "https://api.openai.com"
+                    }
+                }
+            },
+            new StaticHttpClientFactory(new HttpClient(recordingHandler)));
+
+        var decision = await planner.ThinkAsync(
+            originalMessage: "Say hi",
+            history: [],
+            tools: [],
+            requireConfirmationForMutations: true,
+            systemPrompt: "You are concise.");
+
+        Assert.Equal(AgentThinkAction.Done, decision.Action);
+        Assert.Equal("https://api.openai.com/v1/chat/completions", recordingHandler.LastRequestUri);
+
+        using var request = JsonDocument.Parse(recordingHandler.LastRequestBody!);
+        Assert.Equal("gpt-4.1-mini", request.RootElement.GetProperty("model").GetString());
+    }
+
     private sealed class StaticHttpClientFactory(HttpClient httpClient) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => httpClient;

@@ -11,4 +11,10 @@ public class AgentRunOverrides
 {
     /// <summary>Critic mode for this pipeline. <see cref="AgentCriticMode.Off"/> keeps the single-model loop.</summary>
     public AgentCriticMode CriticMode { get; set; } = AgentCriticMode.Off;
+
+    /// <summary>
+    /// Optional per-step provider/model routing overrides for this pipeline run.
+    /// Keep only non-sensitive routing hints here; API keys and base URLs remain worker-owned.
+    /// </summary>
+    public AgentLlmStepRouter? StepRouter { get; set; }
 }
