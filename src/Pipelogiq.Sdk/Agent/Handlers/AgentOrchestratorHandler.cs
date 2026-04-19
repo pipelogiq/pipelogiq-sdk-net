@@ -78,11 +78,18 @@ public class AgentOrchestratorHandler(
             using var _ = AgentLlmRuntime.PushRunOverrides(input.RunOverrides);
             plan = await llmPlanner.PlanAsync(input.Message, tools, agentOptions.SystemPrompt);
         }
-        catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))
+        catch (HttpRequestException ex) when (AgentLlmHttpErrorClassifier.IsRateLimit(ex))
         {
             context.LogWarning($"Planner hit rate limit [{ex.Message.ToLogPreview(300)}]");
             return StageResult.RateLimitExceeded(
                 $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
+        }
+        catch (HttpRequestException ex) when (AgentLlmHttpErrorClassifier.IsInvalidRequest(ex))
+        {
+            context.LogError($"Planner request was rejected as invalid [{ex.Message.ToLogPreview(400)}]");
+            return StageResult.Error(
+                AgentUsageContextHelper.BuildStageOutput(ex.Message, context),
+                AgentLlmHttpErrorClassifier.InvalidRequestErrorCode);
         }
 
         AgentUsageContextHelper.RecordLlmCall(context, plan.TokenUsage);
@@ -215,6 +222,4 @@ public class AgentOrchestratorHandler(
         MaxRetries = RateLimitMaxRetries,
     };
 
-    private static bool IsAnthropicRateLimit(HttpRequestException ex)
-        => ex.StatusCode == HttpStatusCode.TooManyRequests;
 }

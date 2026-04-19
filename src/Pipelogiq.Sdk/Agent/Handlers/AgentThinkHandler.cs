@@ -180,11 +180,18 @@ public class AgentThinkHandler(
                 systemPrompt,
                 attachments);
         }
-        catch (HttpRequestException ex) when (IsAnthropicRateLimit(ex))
+        catch (HttpRequestException ex) when (AgentLlmHttpErrorClassifier.IsRateLimit(ex))
         {
             context.LogWarning($"LLM planner hit rate limit [{ex.Message.ToLogPreview(300)}]");
             return StageResult.RateLimitExceeded(
                 $"Anthropic rate limit reached. Retry scheduled in {RateLimitRetryIntervalSeconds} seconds.");
+        }
+        catch (HttpRequestException ex) when (AgentLlmHttpErrorClassifier.IsInvalidRequest(ex))
+        {
+            context.LogError($"LLM planner rejected the request as invalid [{ex.Message.ToLogPreview(400)}]");
+            return StageResult.Error(
+                AgentUsageContextHelper.BuildStageOutput(ex.Message, context),
+                AgentLlmHttpErrorClassifier.InvalidRequestErrorCode);
         }
 
         // Accumulate token usage in context
@@ -567,9 +574,6 @@ public class AgentThinkHandler(
 
     private static int GetStep(IStageContext? context) =>
         context.TryGetValue<int>(AgentConstants.ThinkStepCount);
-
-    private static bool IsAnthropicRateLimit(HttpRequestException ex)
-        => ex.StatusCode == HttpStatusCode.TooManyRequests;
 
     // ── Loop detection ───────────────────────────────────────────────────────
 

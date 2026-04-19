@@ -1,3 +1,4 @@
+using System.Net;
 using PipelogiqSDK.Abstractions;
 using PipelogiqSDK.Agent;
 using PipelogiqSDK.Agent.Configuration;
@@ -311,6 +312,41 @@ public sealed class AgentThinkHandlerTests
         Assert.Empty(handler.LastAppendedStages);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenPlannerReturnsInvalidRequest_FailsWithoutAppendingRetryStages()
+    {
+        var handler = new CapturingThinkHandler(
+            new ThrowingPlanner(new HttpRequestException(
+                "OpenAI invalid request",
+                null,
+                HttpStatusCode.BadRequest)),
+            new StaticToolRegistry([]),
+            new AgentOptions
+            {
+                RequireConfirmationForMutations = true,
+                MaxThinkSteps = 10,
+            },
+            new PipelogiqApiClient("http://localhost:8081", "test"));
+
+        var context = new StageContext
+        {
+            PipelineId = 105,
+            StageId = 205,
+            Payload = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent:originalMessage"] = "Generate budget",
+                ["agent:conversationHistory"] = new List<AgentConversationTurn>(),
+                ["agent:thinkStepCount"] = 0,
+            }
+        };
+
+        var result = await handler.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("LLM_INVALID_REQUEST", result.ErrorCode);
+        Assert.Empty(handler.LastAppendedStages);
+    }
+
     private sealed class CapturingThinkHandler(
         ILlmPlanner llmPlanner,
         IAgentToolRegistry toolRegistry,
@@ -357,6 +393,32 @@ public sealed class AgentThinkHandlerTests
         {
             return Task.FromResult(decision);
         }
+    }
+
+    private sealed class ThrowingPlanner(HttpRequestException exception) : ILlmPlanner
+    {
+        public Task<AgentPlan> PlanAsync(
+            string userMessage,
+            IReadOnlyList<AgentToolDefinition> tools,
+            string? systemPrompt = null,
+            CancellationToken ct = default)
+            => Task.FromException<AgentPlan>(exception);
+
+        public Task<AgentTextResult> SynthesizeAsync(
+            string originalMessage,
+            IReadOnlyList<AgentToolResult> results,
+            CancellationToken ct = default)
+            => Task.FromResult(new AgentTextResult { Text = "done" });
+
+        public Task<AgentThinkDecision> ThinkAsync(
+            string originalMessage,
+            IReadOnlyList<AgentConversationTurn> history,
+            IReadOnlyList<AgentToolDefinition> tools,
+            bool requireConfirmationForMutations,
+            string? systemPrompt = null,
+            IReadOnlyList<AgentAttachment>? attachments = null,
+            CancellationToken ct = default)
+            => Task.FromException<AgentThinkDecision>(exception);
     }
 
     private sealed class StaticToolRegistry(IReadOnlyList<AgentToolDefinition> tools) : IAgentToolRegistry

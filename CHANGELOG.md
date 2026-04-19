@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-preview.2] - 2026-04-19
+
+### Fixed
+
+- Built-in `OpenAI` planner requests now omit `temperature`, avoiding `400 unsupported_value` failures on models that only accept the provider default temperature.
+- Built-in `OpenAI` critic requests now follow the same compatibility rule, so planner and critic transports behave consistently across newer chat-completions models.
+
+### Changed
+
+- `AgentThinkHandler` and `AgentOrchestratorHandler` now classify invalid LLM client requests (`400` / `422`) as terminal `LLM_INVALID_REQUEST` stage failures instead of letting them fall into generic retry paths.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.2-preview.2` for this branch state.
+
 ## [0.3.2-preview.1] - 2026-04-19
 
 ### Added
@@ -193,7 +208,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.1...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.2...HEAD
+[0.3.2-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.2
 [0.3.2-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.1
 [0.3.1-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.4
 [0.3.1-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.3

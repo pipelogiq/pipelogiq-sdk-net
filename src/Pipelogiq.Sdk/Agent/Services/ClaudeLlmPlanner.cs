@@ -283,7 +283,6 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
         {
             ["model"] = invocation.Model,
             ["messages"] = requestMessages,
-            ["temperature"] = 0,
         };
 
         var openAiTools = BuildOpenAiTools(tools);

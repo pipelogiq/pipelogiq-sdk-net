@@ -43,7 +43,6 @@ public class OpenAiCritic(IHttpClientFactory httpClientFactory) : IAgentCritic
                 new { role = "user", content = userPrompt },
             },
             ["response_format"] = new { type = "json_object" },
-            ["temperature"] = 0,
         };
 
         var http = httpClientFactory.CreateClient("pipelogiq-agent-llm");

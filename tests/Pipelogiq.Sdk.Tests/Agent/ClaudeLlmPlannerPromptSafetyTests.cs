@@ -788,7 +788,7 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
         using var request = JsonDocument.Parse(recordingHandler.LastRequestBody!);
         var root = request.RootElement;
         Assert.Equal("gpt-4.1-mini", root.GetProperty("model").GetString());
-        Assert.Equal(0, root.GetProperty("temperature").GetInt32());
+        Assert.False(root.TryGetProperty("temperature", out _));
         var tools = root.GetProperty("tools");
         Assert.Equal(1, tools.GetArrayLength());
         Assert.Equal("function", tools[0].GetProperty("type").GetString());
