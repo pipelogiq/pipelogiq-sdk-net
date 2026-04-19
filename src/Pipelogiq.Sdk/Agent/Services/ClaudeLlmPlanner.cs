@@ -663,8 +663,7 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
     {
         return argumentsElement.ValueKind switch
         {
-            JsonValueKind.Object => argumentsElement.EnumerateObject()
-                .ToDictionary(property => property.Name, property => ConvertToolArgumentValue(property.Value), StringComparer.Ordinal),
+            JsonValueKind.Object => ParseToolArgumentObject(argumentsElement),
             JsonValueKind.String => ParseOllamaArgumentString(argumentsElement.GetString()),
             _ => new Dictionary<string, object?>(StringComparer.Ordinal),
         };
@@ -681,13 +680,26 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return new Dictionary<string, object?>(StringComparer.Ordinal);
 
-            return document.RootElement.EnumerateObject()
-                .ToDictionary(property => property.Name, property => ConvertToolArgumentValue(property.Value), StringComparer.Ordinal);
+            return ParseToolArgumentObject(document.RootElement);
         }
         catch (JsonException)
         {
             return new Dictionary<string, object?>(StringComparer.Ordinal);
         }
+    }
+
+    private static Dictionary<string, object?> ParseToolArgumentObject(JsonElement objectElement)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        foreach (var property in objectElement.EnumerateObject())
+        {
+            // Some providers/models occasionally emit duplicate keys in tool arguments.
+            // Prefer the last occurrence rather than throwing and losing the whole tool call.
+            result[property.Name] = ConvertToolArgumentValue(property.Value);
+        }
+
+        return result;
     }
 
     private static object? ConvertToolArgumentValue(JsonElement value)

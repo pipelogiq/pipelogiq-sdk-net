@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-preview.3] - 2026-04-19
+
+### Fixed
+
+- OpenAI native tool-call parsing no longer throws when the model emits duplicate argument keys such as repeated `confidenceScore`; the built-in parser now keeps the last value instead of failing the whole `agent:think` step.
+
+### Changed
+
+- Release metadata, README status badges, and package version references now point to `0.3.2-preview.3`.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.2-preview.3` for this branch state.
+
 ## [0.3.2-preview.2] - 2026-04-19
 
 ### Fixed
@@ -208,7 +222,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.2...HEAD
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.3...HEAD
+[0.3.2-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.3
 [0.3.2-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.2
 [0.3.2-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.1
 [0.3.1-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.1-preview.4

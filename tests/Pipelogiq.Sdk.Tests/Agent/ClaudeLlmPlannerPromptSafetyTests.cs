@@ -795,6 +795,80 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
     }
 
     [Fact]
+    public async Task ThinkAsync_WhenOpenAiToolArgumentsContainDuplicateKeys_LastValueWinsWithoutThrow()
+    {
+        var recordingHandler = new RecordingClaudeHandler(HttpStatusCode.OK, """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_budget",
+                        "type": "function",
+                        "function": {
+                          "name": "saveBudgetResult",
+                          "arguments": "{\"confidenceScore\":\"41\",\"confidenceScore\":\"42\",\"currency\":\"USD\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """);
+        var planner = new ClaudeLlmPlanner(
+            new AgentOptions
+            {
+                LlmProvider = AgentLlmProvider.OpenAI,
+                LlmApiKey = "openai-key",
+                LlmModel = "gpt-4.1-mini",
+                LlmApiBaseUrl = "https://api.openai.com"
+            },
+            new StaticHttpClientFactory(new HttpClient(recordingHandler)));
+
+        var decision = await planner.ThinkAsync(
+            originalMessage: "Save the section budget",
+            history: [],
+            tools:
+            [
+                new AgentToolDefinition
+                {
+                    Name = "saveBudgetResult",
+                    Description = "Persist the generated budget sheet",
+                    HttpMethod = "POST",
+                    UrlTemplate = "/budget",
+                    Params = new Dictionary<string, AgentToolParam>
+                    {
+                        ["confidenceScore"] = new()
+                        {
+                            In = "body",
+                            Type = "string",
+                            Required = false,
+                            Description = "Confidence score"
+                        },
+                        ["currency"] = new()
+                        {
+                            In = "body",
+                            Type = "string",
+                            Required = false,
+                            Description = "Currency code"
+                        }
+                    }
+                }
+            ],
+            requireConfirmationForMutations: true,
+            systemPrompt: "You are a budget assistant.");
+
+        Assert.Equal(AgentThinkAction.CallTool, decision.Action);
+        Assert.NotNull(decision.ToolCall);
+        Assert.Equal("saveBudgetResult", decision.ToolCall!.Tool);
+        Assert.Equal("42", decision.ToolCall.Params["confidenceScore"]);
+        Assert.Equal("USD", decision.ToolCall.Params["currency"]);
+    }
+
+    [Fact]
     public async Task ThinkAsync_WhenStepRouterOverridesProvider_UsesPerStepProviderCatalog()
     {
         var recordingHandler = new RecordingClaudeHandler(HttpStatusCode.OK, """
