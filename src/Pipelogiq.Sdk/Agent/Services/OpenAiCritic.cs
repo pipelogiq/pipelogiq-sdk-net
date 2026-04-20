@@ -42,6 +42,7 @@ public class OpenAiCritic(IHttpClientFactory httpClientFactory) : IAgentCritic
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = userPrompt },
             },
+            ["prompt_cache_key"] = OpenAiPromptCacheHelper.BuildCriticCacheKey(model, systemPrompt, tools),
             ["response_format"] = new { type = "json_object" },
         };
 

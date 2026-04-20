@@ -283,6 +283,7 @@ public class ClaudeLlmPlanner(AgentOptions options, IHttpClientFactory httpClien
         {
             ["model"] = invocation.Model,
             ["messages"] = requestMessages,
+            ["prompt_cache_key"] = OpenAiPromptCacheHelper.BuildAgentCacheKey(invocation.Model, system, tools, responseMode.ToString()),
         };
 
         var openAiTools = BuildOpenAiTools(tools);

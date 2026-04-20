@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-preview.5] - 2026-04-20
+
+### Added
+
+- Built-in `OpenAI` planner and critic requests now send a stable `prompt_cache_key`, improving prompt-caching reuse across repeated agent calls on supported models.
+
+### Changed
+
+- OpenAI usage accounting now captures `usage.prompt_tokens_details.cached_tokens` and applies discounted cached-input pricing when estimating stage and session cost.
+- OpenAI-backed document parsing requests now include the same cache routing hint and surface cached-token telemetry in parser-side AI usage accounting.
+- Release metadata, README status badges, and package version references now point to `0.3.2-preview.5`.
+
+### Upgrade Notes
+
+- Use `PipelogiqSDK` package version `0.3.2-preview.5` for this branch state.
+
 ## [0.3.2-preview.4] - 2026-04-19
 
 ### Fixed
@@ -236,8 +252,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > This is an early preview release. APIs may change.
 
-[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.4...HEAD
-[0.3.2-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.4
+[Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.5...HEAD
+[0.3.2-preview.5]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.5
+[0.3.2-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.3...v0.3.2-preview.4
 [0.3.2-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.3
 [0.3.2-preview.2]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.2
 [0.3.2-preview.1]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.1

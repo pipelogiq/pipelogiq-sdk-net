@@ -737,7 +737,10 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
               ],
               "usage": {
                 "prompt_tokens": 120,
-                "completion_tokens": 35
+                "completion_tokens": 35,
+                "prompt_tokens_details": {
+                  "cached_tokens": 96
+                }
               }
             }
             """);
@@ -783,12 +786,15 @@ public sealed class ClaudeLlmPlannerPromptSafetyTests
         Assert.Equal("Tallinn", decision.ToolCall.Params["city"]);
         Assert.NotNull(decision.TokenUsage);
         Assert.Equal("OpenAI", decision.TokenUsage!.Provider);
+        Assert.Equal(96, decision.TokenUsage.CacheReadTokens);
         Assert.Equal("https://api.openai.com/v1/chat/completions", recordingHandler.LastRequestUri);
 
         using var request = JsonDocument.Parse(recordingHandler.LastRequestBody!);
         var root = request.RootElement;
         Assert.Equal("gpt-4.1-mini", root.GetProperty("model").GetString());
         Assert.False(root.TryGetProperty("temperature", out _));
+        Assert.True(root.TryGetProperty("prompt_cache_key", out var promptCacheKey));
+        Assert.False(string.IsNullOrWhiteSpace(promptCacheKey.GetString()));
         var tools = root.GetProperty("tools");
         Assert.Equal(1, tools.GetArrayLength());
         Assert.Equal("function", tools[0].GetProperty("type").GetString());

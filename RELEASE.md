@@ -11,10 +11,10 @@ This repository uses semantic versioning and currently publishes preview (`0.x`)
 Example:
 
 ```bash
-git checkout -b release/v0.3.2-preview.4
+git checkout -b release/v0.3.2-preview.5
 # edit Directory.Build.props, package .csproj files, and CHANGELOG.md
 git add Directory.Build.props src/Pipelogiq.Sdk/*.csproj src/Pipelogiq.Sdk.Redis/*.csproj src/Pipelogiq.Sdk.Postgres/*.csproj src/Pipelogiq.Sdk.Testing/*.csproj CHANGELOG.md
-git commit -m "chore(release): prepare v0.3.2-preview.4"
+git commit -m "chore(release): prepare v0.3.2-preview.5"
 ```
 
 ## 2. Create and push tag
@@ -22,8 +22,8 @@ git commit -m "chore(release): prepare v0.3.2-preview.4"
 ```bash
 git checkout main
 git pull --ff-only
-git tag v0.3.2-preview.4
-git push origin v0.3.2-preview.4
+git tag v0.3.2-preview.5
+git push origin v0.3.2-preview.5
 ```
 
 Tag format is `vX.Y.Z` or `vX.Y.Z-preview.N`.
