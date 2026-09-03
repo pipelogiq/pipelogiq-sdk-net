@@ -15,6 +15,30 @@ public class StageNextDto
     /// </summary>
     public int? PipelineId { get; set; }
 
+    /// <summary>Stable identifier for this stage execution delivery.</summary>
+    public string? ExecutionId { get; set; }
+
+    /// <summary>One-based stage execution attempt number.</summary>
+    public int? Attempt { get; set; }
+
+    /// <summary>Pipeline idempotency key associated with this execution.</summary>
+    public string? IdempotencyKey { get; set; }
+
+    /// <summary>Effective stage timeout in seconds.</summary>
+    public int? TimeoutSeconds { get; set; }
+
+    /// <summary>W3C trace identifier associated with this execution.</summary>
+    public string? TraceId { get; set; }
+
+    /// <summary>W3C span identifier associated with this execution.</summary>
+    public string? SpanId { get; set; }
+
+    /// <summary>W3C traceparent associated with this execution.</summary>
+    public string? Traceparent { get; set; }
+
+    /// <summary>W3C tracestate associated with this execution.</summary>
+    public string? Tracestate { get; set; }
+
     /// <summary>
     /// Gets or sets stage handler name.
     /// </summary>

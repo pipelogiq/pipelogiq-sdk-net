@@ -43,7 +43,7 @@ public class StageExecutor(IServiceProvider serviceProvider)
             activity?.SetStatus(ActivityStatusCode.Ok);
             WriteTraceContextToPayload(stageContext, activity);
 
-            result.ContextItems = PayloadConverter.ToContextItems(stageContext.Payload);
+            result.ContextItems = PayloadConverter.ToContextItems(stageContext.Payload, data.ContextItems);
             result.Logs = stageContext.Logger?.Logs;
             return result;
         }
@@ -51,7 +51,9 @@ public class StageExecutor(IServiceProvider serviceProvider)
         {
             if (activity != null)
             {
-                activity.SetStatus(ActivityStatusCode.Error, ex.Message);
+                // Exception messages may contain upstream payloads, credentials,
+                // or business data. Keep telemetry diagnostic but content-free.
+                activity.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
                 activity.SetTag("pipelogiq.error.type", ex.GetType().FullName ?? ex.GetType().Name);
             }
 
@@ -86,14 +88,23 @@ public class StageExecutor(IServiceProvider serviceProvider)
             StageId = data.StageId,
             Payload = payload,
             CreatedTime = DateTime.UtcNow,
+            ExecutionId = data.ExecutionId,
+            Attempt = data.Attempt,
+            IdempotencyKey = data.IdempotencyKey,
+            TimeoutSeconds = data.TimeoutSeconds,
+            CancellationToken = data.CancellationToken,
+            Traceparent = data.Traceparent,
+            Tracestate = data.Tracestate,
+            TraceId = data.TraceId,
+            SpanId = data.SpanId,
             Logger = data.Logger,
         };
     }
 
     private static Activity StartStageActivity(object handler, StageExecutionData data, StageContext stageContext)
     {
-        var traceparent = stageContext.TryGetValue<string>(TraceparentKey);
-        var tracestate = stageContext.TryGetValue<string>(TracestateKey);
+        var traceparent = stageContext.Traceparent ?? stageContext.TryGetValue<string>(TraceparentKey);
+        var tracestate = stageContext.Tracestate ?? stageContext.TryGetValue<string>(TracestateKey);
 
         Activity activity;
         if (!string.IsNullOrWhiteSpace(traceparent) &&
@@ -165,9 +176,15 @@ public class StageExecutor(IServiceProvider serviceProvider)
 
         stageContext.Payload ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         stageContext.Payload[TraceparentKey] = activity.Id!;
+        stageContext.Traceparent = activity.Id;
+        stageContext.TraceId = activity.TraceId.ToHexString();
+        stageContext.SpanId = activity.SpanId.ToHexString();
 
         if (!string.IsNullOrWhiteSpace(activity.TraceStateString))
+        {
             stageContext.Payload[TracestateKey] = activity.TraceStateString!;
+            stageContext.Tracestate = activity.TraceStateString;
+        }
     }
 
     private static async Task<IStageResult> InvokeHandlerAsync(object handler, StageExecutionData data, StageContext stageContext)

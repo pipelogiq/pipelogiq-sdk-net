@@ -18,13 +18,14 @@ public abstract class BaseApiClient
     /// <param name="baseUrl">Base API URL.</param>
     /// <param name="apiKey">Optional API key.</param>
     /// <param name="handler">Optional HTTP message handler.</param>
-    protected BaseApiClient(string baseUrl, string? apiKey = null, HttpMessageHandler? handler = null)
+    protected BaseApiClient(
+        string baseUrl,
+        string? apiKey = null,
+        HttpMessageHandler? handler = null,
+        bool allowInsecureServerCertificate = false)
     {
         _baseUrl = baseUrl.TrimEnd('/');
-        _httpClient = new HttpClient(handler ?? new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-        });
+        _httpClient = new HttpClient(handler ?? CreateDefaultHandler(allowInsecureServerCertificate));
 
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -33,6 +34,15 @@ public abstract class BaseApiClient
             _httpClient.DefaultRequestHeaders.Add("apikey", apiKey);
             _httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
         }
+    }
+
+    private static HttpMessageHandler CreateDefaultHandler(bool allowInsecureServerCertificate)
+    {
+        var handler = new HttpClientHandler();
+        if (allowInsecureServerCertificate)
+            handler.ServerCertificateCustomValidationCallback =
+                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        return handler;
     }
 
     /// <summary>

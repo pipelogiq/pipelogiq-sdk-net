@@ -19,4 +19,10 @@ public class ContextItem
     /// Gets or sets CLR type name of the value.
     /// </summary>
     public string ValueType { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets whether the value must be redacted from logs and status responses.
+    /// </summary>
+    [Newtonsoft.Json.JsonProperty("isSensitive")]
+    public bool IsSensitive { get; set; }
 }

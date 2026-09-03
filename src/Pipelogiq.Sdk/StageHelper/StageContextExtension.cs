@@ -10,6 +10,30 @@ namespace PipelogiqSDK.StageHelper;
 public static class StageContextExtension
 {
     /// <summary>
+    /// Returns optional technical execution metadata when supplied by the worker runtime.
+    /// </summary>
+    public static IStageExecutionContext? AsExecutionContext(this IStageContext? stageContext)
+        => stageContext as IStageExecutionContext;
+
+    /// <summary>
+    /// Returns the handler cancellation token, or <see cref="CancellationToken.None"/> for a legacy context.
+    /// </summary>
+    public static CancellationToken GetCancellationToken(this IStageContext? stageContext)
+        => (stageContext as IStageExecutionContext)?.CancellationToken ?? CancellationToken.None;
+
+    /// <summary>Returns the one-based execution attempt number when available.</summary>
+    public static int? GetAttempt(this IStageContext? stageContext)
+        => (stageContext as IStageExecutionContext)?.Attempt;
+
+    /// <summary>Returns the stable execution identifier when available.</summary>
+    public static string? GetExecutionId(this IStageContext? stageContext)
+        => (stageContext as IStageExecutionContext)?.ExecutionId;
+
+    /// <summary>Returns the pipeline idempotency key when available.</summary>
+    public static string? GetIdempotencyKey(this IStageContext? stageContext)
+        => (stageContext as IStageExecutionContext)?.IdempotencyKey;
+
+    /// <summary>
     /// Attempts to read and convert payload value by key.
     /// </summary>
     /// <typeparam name="T">Expected value type.</typeparam>

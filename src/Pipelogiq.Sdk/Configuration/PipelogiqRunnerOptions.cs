@@ -16,6 +16,12 @@ public class PipelogiqRunnerOptions
     public string ApiUrl { get; set; } = "http://localhost:8081";
 
     /// <summary>
+    /// Allows an invalid HTTPS server certificate. Disabled by default.
+    /// Use only for explicitly isolated local development environments.
+    /// </summary>
+    public bool AllowInsecureServerCertificate { get; set; }
+
+    /// <summary>
     /// Gets or sets worker name reported to control plane.
     /// </summary>
     public string? WorkerName { get; set; }

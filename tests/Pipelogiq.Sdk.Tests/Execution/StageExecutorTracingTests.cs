@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using PipelogiqSDK.Abstractions;
 using PipelogiqSDK.Contracts;
@@ -119,7 +120,7 @@ public sealed class StageExecutorTracingTests
             new()
             {
                 Key = TraceparentKey,
-                Value = traceparent,
+                Value = JsonSerializer.Serialize(traceparent),
                 ValueType = typeof(string).AssemblyQualifiedName ?? typeof(string).FullName!,
             }
         };
@@ -129,7 +130,7 @@ public sealed class StageExecutorTracingTests
     {
         var item = Assert.Single(result.ContextItems!.Where(i =>
             string.Equals(i.Key, key, StringComparison.OrdinalIgnoreCase)));
-        return item.Value;
+        return JsonSerializer.Deserialize<string>(item.Value) ?? item.Value;
     }
 
     private static Activity StartW3cActivity(string name)

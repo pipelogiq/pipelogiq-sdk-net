@@ -16,7 +16,11 @@ public class PipelogiqApiClient : BaseApiClient
     /// Initializes a client from runner options.
     /// </summary>
     /// <param name="options">Runner options.</param>
-    public PipelogiqApiClient(PipelogiqRunnerOptions options) : base(options.ApiUrl, options.ApiKey)
+    public PipelogiqApiClient(PipelogiqRunnerOptions options)
+        : base(
+            options.ApiUrl,
+            options.ApiKey,
+            allowInsecureServerCertificate: options.AllowInsecureServerCertificate)
     {
         _apiKey = options.ApiKey;
     }
@@ -26,7 +30,14 @@ public class PipelogiqApiClient : BaseApiClient
     /// </summary>
     /// <param name="baseUrl">Base API URL.</param>
     /// <param name="apiKey">Optional API key.</param>
-    public PipelogiqApiClient(string baseUrl, string? apiKey = null) : base(baseUrl, apiKey)
+    public PipelogiqApiClient(
+        string baseUrl,
+        string? apiKey = null,
+        bool allowInsecureServerCertificate = false)
+        : base(
+            baseUrl,
+            apiKey,
+            allowInsecureServerCertificate: allowInsecureServerCertificate)
     {
         _apiKey = apiKey;
     }
@@ -45,6 +56,42 @@ public class PipelogiqApiClient : BaseApiClient
     public Task<PipelineResponse> PostPipelineAsync(PipelineDto pipeline, CancellationToken ct = default)
     {
         return PostAsync<PipelineResponse>("pipelines", pipeline, ct);
+    }
+
+    /// <summary>
+    /// Creates a pipeline through the fail-safe idempotent endpoint.
+    /// </summary>
+    /// <param name="pipeline">Pipeline payload with a non-empty idempotency key.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The newly created or previously existing pipeline.</returns>
+    public async Task<PipelineResponse> PostIdempotentPipelineAsync(
+        PipelineDto pipeline,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(pipeline);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeline.IdempotencyKey);
+
+        var request = new IdempotentPipelineCreateRequest
+        {
+            Name = pipeline.Name,
+            IdempotencyKey = pipeline.IdempotencyKey!,
+            Stages = pipeline.Stages,
+            PipelineKeywords = pipeline.PipelineKeywords,
+            PipelineContextItems = pipeline.PipelineContextItems,
+        };
+
+        var response = await PostAsync<IdempotentPipelineCreateResponse>(
+            "pipelines/idempotent",
+            request,
+            ct,
+            BuildApiKeyHeaders(pipeline.ApiKey));
+
+        if (response.Pipeline == null)
+            throw new InvalidOperationException("Idempotent pipeline response is missing the pipeline.");
+
+        response.Pipeline.WasExisting = response.WasExisting || !response.Created;
+        response.Pipeline.IdempotencyKey ??= pipeline.IdempotencyKey;
+        return response.Pipeline;
     }
 
     /// <summary>
@@ -164,7 +211,74 @@ public class PipelogiqApiClient : BaseApiClient
     /// <returns>Pipeline detail response.</returns>
     public Task<PipelineResponse> GetPipelineAsync(int pipelineId, CancellationToken ct = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pipelineId);
         return GetAsync<PipelineResponse>($"pipelines/{pipelineId}", ct);
+    }
+
+    /// <summary>
+    /// Looks up a pipeline by idempotency key without placing the key in the request URL.
+    /// </summary>
+    /// <param name="idempotencyKey">Client-provided pipeline idempotency key.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The matching pipeline for the authenticated application.</returns>
+    public Task<PipelineResponse> GetPipelineByIdempotencyKeyAsync(
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        return PostAsync<PipelineResponse>(
+            "pipelines/by-idempotency-key",
+            new PipelineIdempotencyKeyRequest { IdempotencyKey = idempotencyKey.Trim() },
+            ct);
+    }
+
+    /// <summary>
+    /// Cancels a pipeline owned by the authenticated application.
+    /// </summary>
+    /// <param name="pipelineId">Pipeline identifier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public Task CancelPipelineAsync(int pipelineId, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pipelineId);
+        return PostAsync($"pipelines/{pipelineId}/cancel", new { }, ct);
+    }
+
+    /// <summary>
+    /// Atomically claims a dispatched stage execution for this worker.
+    /// </summary>
+    public Task<StageLeaseResponse> AcquireStageLeaseAsync(
+        int stageId,
+        string executionId,
+        string workerId,
+        string workerSessionToken,
+        CancellationToken ct = default)
+    {
+        return PostStageLeaseAsync(
+            stageId,
+            "acquire",
+            executionId,
+            workerId,
+            workerSessionToken,
+            ct);
+    }
+
+    /// <summary>
+    /// Renews a stage execution lease already owned by this worker.
+    /// </summary>
+    public Task<StageLeaseResponse> RenewStageLeaseAsync(
+        int stageId,
+        string executionId,
+        string workerId,
+        string workerSessionToken,
+        CancellationToken ct = default)
+    {
+        return PostStageLeaseAsync(
+            stageId,
+            "renew",
+            executionId,
+            workerId,
+            workerSessionToken,
+            ct);
     }
 
     /// <summary>
@@ -193,6 +307,42 @@ public class PipelogiqApiClient : BaseApiClient
         return value;
     }
 
+    private Task<StageLeaseResponse> PostStageLeaseAsync(
+        int stageId,
+        string operation,
+        string executionId,
+        string workerId,
+        string workerSessionToken,
+        CancellationToken ct)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stageId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerSessionToken);
+
+        return PostAsync<StageLeaseResponse>(
+            $"stages/{stageId}/lease/{operation}",
+            new StageLeaseRequest
+            {
+                ExecutionId = executionId.Trim(),
+                WorkerId = workerId.Trim(),
+            },
+            ct,
+            BuildSessionHeaders(workerSessionToken));
+    }
+
+    private IReadOnlyDictionary<string, string>? BuildApiKeyHeaders(string? pipelineApiKey)
+    {
+        var value = !string.IsNullOrWhiteSpace(pipelineApiKey) ? pipelineApiKey : _apiKey;
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return new Dictionary<string, string>
+        {
+            ["X-API-Key"] = value
+        };
+    }
+
     private static Dictionary<string, string> BuildSessionHeaders(string workerSessionToken)
     {
         if (string.IsNullOrWhiteSpace(workerSessionToken))
@@ -203,5 +353,19 @@ public class PipelogiqApiClient : BaseApiClient
             ["X-Worker-Session"] = workerSessionToken,
             ["Authorization"] = $"Bearer {workerSessionToken}"
         };
+    }
+
+    private sealed class IdempotentPipelineCreateRequest
+    {
+        public string Name { get; set; } = null!;
+
+        [Newtonsoft.Json.JsonProperty("idempotencyKey")]
+        public string IdempotencyKey { get; set; } = null!;
+
+        public List<StageInfo>? Stages { get; set; }
+
+        public List<KeywordDto>? PipelineKeywords { get; set; }
+
+        public List<ContextItem>? PipelineContextItems { get; set; }
     }
 }

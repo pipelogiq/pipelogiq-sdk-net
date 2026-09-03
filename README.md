@@ -1,9 +1,9 @@
 # Pipelogiq .NET SDK
 
-![Status: Preview v0.3.2-preview.5](https://img.shields.io/badge/status-Preview%20v0.3.2--preview.5-orange)
+![Status: Preview v0.3.2-preview.6](https://img.shields.io/badge/status-Preview%20v0.3.2--preview.6-orange)
 
 Pipelogiq .NET SDK provides the .NET worker runtime and API client helpers for Pipelogiq pipelines.
-This repository is currently shipping **v0.3.2-preview.5** packages focused on execution, transport, integration primitives, and AI agent workflows.
+This release targets **v0.3.2-preview.6** and pairs with Pipelogiq server `v0.3.2-preview.7`.
 APIs may change while the SDK is still stabilizing.
 
 ## Installation
@@ -51,7 +51,7 @@ internal sealed class HelloStageHandler : IStageHandler<HelloInput>
 {
     public Task<IStageResult> ExecuteAsync(HelloInput input, IStageContext? context = null)
     {
-        context.AddItem("lastGreeting", $"Hello {input.Name}");
+        context?.AddItem("lastGreeting", $"Hello {input.Name}");
         return Task.FromResult<IStageResult>(StageResult.Success($"Hello {input.Name}"));
     }
 }
@@ -70,6 +70,19 @@ await PipelineBuilder.Create("sample-pipeline", options)
     .WithAction("receipt", "ReceiptHandler")
     .SendAsync();
 ```
+
+## Reliable workflows
+
+For side-effecting workflows, use `WithIdempotencyKey(...)`, classified
+`StageResult` failures, an error-code retry allowlist, and the status API.
+The worker runtime adds execution leases and stale-result fencing for normal
+non-event stages. These mechanisms do not make external operations exactly
+once: handlers must retain their own stable external idempotency key and
+reconcile an unknown outcome before another command.
+
+See [`examples/InsuranceClaimWorkflow`](examples/InsuranceClaimWorkflow/README.md)
+for an end-to-end claim and cancellation example that keeps business state in
+the consumer database.
 
 ## Tracing
 
@@ -97,6 +110,8 @@ Details: `docs/compatibility.md`
 - `docs/tracing-opentelemetry.md`
 - `docs/compatibility.md`
 - `docs/ai-agent.md`
+- `docs/rag.md`
+- `examples/InsuranceClaimWorkflow/README.md`
 - `examples/README.md`
 - `examples/MinimalWorker/README.md`
 - `examples/WorkerAndPipelineHost/README.md`

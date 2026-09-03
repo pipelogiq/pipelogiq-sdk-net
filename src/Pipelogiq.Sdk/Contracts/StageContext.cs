@@ -6,7 +6,7 @@ namespace PipelogiqSDK.Contracts;
 /// <summary>
 /// Default implementation of <see cref="IStageContext"/>.
 /// </summary>
-public class StageContext : IStageContext
+public class StageContext : IStageContext, IStageExecutionContext
 {
     /// <inheritdoc />
     public int? PipelineId { get; set; }
@@ -22,6 +22,33 @@ public class StageContext : IStageContext
 
     /// <inheritdoc />
     public Dictionary<string, object>? Payload { get; set; }
+
+    /// <inheritdoc />
+    public string? ExecutionId { get; set; }
+
+    /// <inheritdoc />
+    public int? Attempt { get; set; }
+
+    /// <inheritdoc />
+    public string? IdempotencyKey { get; set; }
+
+    /// <inheritdoc />
+    public int? TimeoutSeconds { get; set; }
+
+    /// <inheritdoc />
+    public CancellationToken CancellationToken { get; set; }
+
+    /// <inheritdoc />
+    public string? Traceparent { get; set; }
+
+    /// <inheritdoc />
+    public string? Tracestate { get; set; }
+
+    /// <inheritdoc />
+    public string? TraceId { get; set; }
+
+    /// <inheritdoc />
+    public string? SpanId { get; set; }
 
     /// <summary>
     /// Gets or sets stage logger used during execution.

@@ -22,6 +22,7 @@ namespace PipelogiqSDK.Runner;
 public class PipelineRunner
 {
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan LeaseRenewRetryDelay = TimeSpan.FromSeconds(2);
     private readonly ILogger<PipelineRunner> _logger;
     private readonly PipelogiqApiClient _apiClient;
     private readonly PipelogiqRunnerOptions _runnerOptions;
@@ -282,6 +283,7 @@ public class PipelineRunner
         var bootstrapRequest = BuildBootstrapRequest(supportedHandlers);
         var bootstrapResponse = await _apiClient.PostWorkerBootstrapAsync(bootstrapRequest, stoppingToken);
         ValidateBootstrapResponse(bootstrapResponse);
+        ApplyLocalBrokerOverride(bootstrapResponse);
 
         _bootstrap = bootstrapResponse;
         _workerId = bootstrapResponse.WorkerId!;
@@ -351,6 +353,15 @@ public class PipelineRunner
 
         if (string.IsNullOrWhiteSpace(bootstrapResponse.Application.AppId))
             throw new InvalidOperationException("Bootstrap response is missing application.appId.");
+    }
+
+    private static void ApplyLocalBrokerOverride(WorkerBootstrapResponse bootstrapResponse)
+    {
+        var overrideConnectionString = Environment.GetEnvironmentVariable("PIPELOGIQ_RABBITMQ_URL");
+        if (string.IsNullOrWhiteSpace(overrideConnectionString))
+            return;
+
+        bootstrapResponse.MessageBroker.ConnectionString = overrideConnectionString.Trim();
     }
 
     private static IReadOnlyList<string> BuildStageNextQueueNames(
@@ -500,6 +511,7 @@ public class PipelineRunner
 
         _connection = factory.CreateConnection();
         _publishChannel = _connection.CreateModel();
+        _publishChannel.ConfirmSelect();
         if (!EnsureQueueExists(_stageResultQueue))
             return false;
 
@@ -592,7 +604,7 @@ public class PipelineRunner
         if (parsedMessage is null || string.IsNullOrWhiteSpace(parsedMessage.StageHandlerName))
         {
             Interlocked.Increment(ref _jobsFailed);
-            _logger.LogWarning("Dropping invalid StageNext payload: {Payload}", rawMessage);
+            _logger.LogWarning("Dropping invalid StageNext payload.");
             SafeAck(channel, delivery.DeliveryTag);
             return;
         }
@@ -600,19 +612,40 @@ public class PipelineRunner
         Interlocked.Increment(ref _inFlightJobs);
         try
         {
-            _logger.LogInformation("Received StageNext: {Payload}", PipelineMessageSerializer.Serialize(parsedMessage));
+            _logger.LogInformation(
+                "Received StageNext for pipeline {PipelineId}, stage {StageId}, attempt {Attempt}, handler {Handler}.",
+                parsedMessage.PipelineId,
+                parsedMessage.StageId,
+                parsedMessage.Attempt,
+                parsedMessage.StageHandlerName);
 
-            if (delivery.Redelivered && await IsStageAlreadyTerminalAsync(parsedMessage))
+            StageLeaseResponse? lease = null;
+            if (!string.IsNullOrWhiteSpace(parsedMessage.ExecutionId))
+            {
+                lease = await AcquireStageLeaseAsync(parsedMessage, stoppingToken);
+                if (!lease.Acquired)
+                {
+                    _logger.LogInformation(
+                        "Skipping stage {StageId} execution {ExecutionId}: lease denied ({Reason}).",
+                        parsedMessage.StageId,
+                        parsedMessage.ExecutionId,
+                        lease.Reason ?? "unspecified");
+                    Interlocked.Increment(ref _jobsProcessed);
+                    SafeAck(channel, delivery.DeliveryTag);
+                    return;
+                }
+            }
+            else if (await IsStageAlreadyTerminalAsync(parsedMessage))
             {
                 _logger.LogWarning(
-                    "Skipping redelivered message for stage {StageId} — stage is already in a terminal state.",
+                    "Skipping legacy message for stage {StageId} — stage is already in a terminal state.",
                     parsedMessage.StageId);
                 Interlocked.Increment(ref _jobsProcessed);
                 SafeAck(channel, delivery.DeliveryTag);
                 return;
             }
 
-            var isSuccess = await ExecuteAndPublishResult(parsedMessage, stoppingToken);
+            var isSuccess = await ExecuteAndPublishResult(parsedMessage, lease, stoppingToken);
 
             if (isSuccess)
             {
@@ -652,31 +685,50 @@ public class PipelineRunner
         }
     }
 
-    private async Task<bool> ExecuteAndPublishResult(StageNextDto stage, CancellationToken stoppingToken)
+    private async Task<bool> ExecuteAndPublishResult(
+        StageNextDto stage,
+        StageLeaseResponse? lease,
+        CancellationToken stoppingToken)
     {
         var resultDto = new WorkerStageResultMessage
         {
             PipelineId = stage.PipelineId,
             StageId = stage.StageId,
+            ExecutionId = stage.ExecutionId,
+            Attempt = stage.Attempt,
         };
 
         var logger = new PipelineLogger();
+        using var executionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        if (stage.TimeoutSeconds is > 0)
+            executionCts.CancelAfter(TimeSpan.FromSeconds(stage.TimeoutSeconds.Value));
+
+        var leaseState = new LeaseMonitorState();
+        using var leaseMonitorCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var leaseMonitorTask = lease is not null
+            ? RunLeaseRenewalAsync(stage, lease, executionCts, leaseState, leaseMonitorCts.Token)
+            : Task.CompletedTask;
 
         try
         {
             var executionData = BuildExecutionData(stage);
             executionData.Logger = logger;
+            executionData.CancellationToken = executionCts.Token;
             logger.Info(
-                $"Stage execution starting [stageId={stage.StageId}, handler={stage.StageHandlerName}, pipelineId={stage.PipelineId}, inputPreview={stage.Input.ToLogPreview(800)}]");
+                $"Stage execution starting [stageId={stage.StageId}, handler={stage.StageHandlerName}, pipelineId={stage.PipelineId}, attempt={stage.Attempt}]");
 
-            using var publishCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await SetStatusToRunning(stage.StageId, publishCts.Token);
+            if (string.IsNullOrWhiteSpace(stage.ExecutionId))
+            {
+                using var publishCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await SetStatusToRunning(stage.StageId, publishCts.Token);
+            }
 
             var stageResult = await _stageExecutor.ExecuteStageHandlerAsync(executionData);
 
             resultDto.Result = stageResult.Result;
             resultDto.IsSuccess = stageResult.IsSuccess;
             resultDto.ErrorCode = stageResult.ErrorCode;
+            resultDto.Retryable = (stageResult as IClassifiedStageResult)?.Retryable;
             resultDto.ContextItems = stageResult.ContextItems;
             resultDto.NextStageId = stageResult.NextStageId;
             resultDto.RunNextIfCurrentFailed = stageResult.RunNextIfCurrentFailed;
@@ -685,23 +737,83 @@ public class PipelineRunner
                 .Select(MapAppendedStage)
                 .ToList();
             logger.Info(
-                $"Stage execution finished [stageId={stage.StageId}, success={stageResult.IsSuccess}, waitingForApproval={stageResult.IsWaitingForApproval}, errorCode={stageResult.ErrorCode ?? "-"}, nextStageId={(stageResult.NextStageId?.ToString() ?? "-")}, contextItems={stageResult.ContextItems?.Count ?? 0}, appendedStages={stageResult.AppendedStages?.Count ?? 0}, resultPreview={stageResult.Result.ToLogPreview(800)}]");
+                $"Stage execution finished [stageId={stage.StageId}, success={stageResult.IsSuccess}, waitingForApproval={stageResult.IsWaitingForApproval}, errorCode={stageResult.ErrorCode ?? "-"}, nextStageId={(stageResult.NextStageId?.ToString() ?? "-")}, contextItems={stageResult.ContextItems?.Count ?? 0}, appendedStages={stageResult.AppendedStages?.Count ?? 0}]");
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (leaseState.Lost)
+        {
+            logger.Warning(
+                $"Stage execution cancelled after lease loss [stageId={stage.StageId}, attempt={stage.Attempt}]");
+        }
+        catch (OperationCanceledException)
+        {
+            resultDto.Result = "Stage handler exceeded its execution timeout.";
+            resultDto.IsSuccess = false;
+            resultDto.ErrorCode = StageErrorCodes.Timeout;
+            resultDto.Retryable = true;
+            logger.Error(
+                $"Stage execution timed out [stageId={stage.StageId}, attempt={stage.Attempt}]");
+        }
+        catch (TimeoutException)
+        {
+            resultDto.Result = "Upstream operation timed out.";
+            resultDto.IsSuccess = false;
+            resultDto.ErrorCode = StageErrorCodes.Timeout;
+            resultDto.Retryable = true;
+            logger.Error($"Stage execution reported a timeout [stageId={stage.StageId}]");
+        }
+        catch (HttpRequestException)
+        {
+            resultDto.Result = "Upstream transport request failed.";
+            resultDto.IsSuccess = false;
+            resultDto.ErrorCode = StageErrorCodes.TransportUnavailable;
+            resultDto.Retryable = true;
+            logger.Error($"Stage execution reported a transport failure [stageId={stage.StageId}]");
+        }
+        catch (IOException)
+        {
+            resultDto.Result = "Upstream transport became unavailable.";
+            resultDto.IsSuccess = false;
+            resultDto.ErrorCode = StageErrorCodes.TransportUnavailable;
+            resultDto.Retryable = true;
+            logger.Error($"Stage execution reported a transport failure [stageId={stage.StageId}]");
         }
         catch (Exception ex)
         {
-            resultDto.Result = $"{ex.Message}\n{ex.StackTrace}";
+            resultDto.Result = "Stage handler failed with an unclassified exception.";
             resultDto.IsSuccess = false;
+            resultDto.ErrorCode = "UNHANDLED_EXCEPTION";
+            resultDto.Retryable = false;
             logger.Error(
-                $"Stage execution crashed [stageId={stage.StageId}, handler={stage.StageHandlerName}, error={ex.Message.ToLogPreview(800)}]");
+                $"Stage execution crashed [stageId={stage.StageId}, handler={stage.StageHandlerName}, exceptionType={ex.GetType().Name}]");
         }
         finally
         {
+            leaseMonitorCts.Cancel();
+            await AwaitSilently(leaseMonitorTask);
             resultDto.Logs = logger.Logs;
+        }
+
+        if (leaseState.Lost)
+        {
+            _logger.LogWarning(
+                "Not publishing result for stage {StageId}, execution {ExecutionId}: execution lease was lost.",
+                stage.StageId,
+                stage.ExecutionId);
+            return false;
         }
 
         using var resultPublishCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var serializedResult = PipelineMessageSerializer.Serialize(resultDto);
-        _logger.LogInformation("Publishing result for StageId {StageId}: {Payload}", stage.StageId, serializedResult);
+        _logger.LogInformation(
+            "Publishing result for stage {StageId}, execution {ExecutionId}, success={IsSuccess}, errorCode={ErrorCode}.",
+            stage.StageId,
+            stage.ExecutionId,
+            resultDto.IsSuccess,
+            resultDto.ErrorCode);
         await PublishToQueueAsync(_stageResultQueue, serializedResult, resultPublishCts.Token);
 
         return resultDto.IsSuccess;
@@ -733,6 +845,93 @@ public class PipelineRunner
         };
     }
 
+    private async Task<StageLeaseResponse> AcquireStageLeaseAsync(
+        StageNextDto stage,
+        CancellationToken stoppingToken)
+    {
+        if (string.IsNullOrWhiteSpace(stage.ExecutionId))
+            throw new InvalidOperationException("ExecutionId is required to acquire a stage lease.");
+        if (string.IsNullOrWhiteSpace(_workerId) || string.IsNullOrWhiteSpace(_workerSessionToken))
+            throw new InvalidOperationException("Worker session is required to acquire a stage lease.");
+
+        return await _apiClient.AcquireStageLeaseAsync(
+            stage.StageId,
+            stage.ExecutionId,
+            _workerId,
+            _workerSessionToken,
+            stoppingToken);
+    }
+
+    private async Task RunLeaseRenewalAsync(
+        StageNextDto stage,
+        StageLeaseResponse initialLease,
+        CancellationTokenSource executionCts,
+        LeaseMonitorState state,
+        CancellationToken stoppingToken)
+    {
+        if (string.IsNullOrWhiteSpace(stage.ExecutionId) ||
+            string.IsNullOrWhiteSpace(_workerId) ||
+            string.IsNullOrWhiteSpace(_workerSessionToken))
+        {
+            state.MarkLost();
+            executionCts.Cancel();
+            return;
+        }
+
+        var expiresAt = initialLease.LeaseExpiresAt ?? DateTimeOffset.UtcNow.AddMinutes(1);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var remaining = expiresAt - DateTimeOffset.UtcNow;
+            var delay = remaining / 2;
+            if (delay > TimeSpan.FromSeconds(20))
+                delay = TimeSpan.FromSeconds(20);
+            if (delay < TimeSpan.FromSeconds(1))
+                delay = TimeSpan.FromSeconds(1);
+
+            try
+            {
+                await Task.Delay(delay, stoppingToken);
+                var renewed = await _apiClient.RenewStageLeaseAsync(
+                    stage.StageId,
+                    stage.ExecutionId,
+                    _workerId,
+                    _workerSessionToken,
+                    stoppingToken);
+                if (!renewed.Acquired)
+                {
+                    state.MarkLost();
+                    executionCts.Cancel();
+                    return;
+                }
+
+                expiresAt = renewed.LeaseExpiresAt ?? DateTimeOffset.UtcNow.AddMinutes(1);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (DateTimeOffset.UtcNow >= expiresAt)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Stage {StageId} lease could not be renewed before expiry.",
+                        stage.StageId);
+                    state.MarkLost();
+                    executionCts.Cancel();
+                    return;
+                }
+
+                _logger.LogWarning(
+                    ex,
+                    "Transient failure renewing stage {StageId} lease; retrying.",
+                    stage.StageId);
+                await Task.Delay(LeaseRenewRetryDelay, stoppingToken);
+            }
+        }
+    }
+
     private StageExecutionData BuildExecutionData(StageNextDto stage)
     {
         var handlerName = stage.StageHandlerName ?? throw new InvalidOperationException("StageHandlerName is required.");
@@ -742,6 +941,14 @@ public class PipelineRunner
             JsonInput = stage.Input,
             StageId = stage.StageId,
             PipelineId = stage.PipelineId,
+            ExecutionId = stage.ExecutionId,
+            Attempt = stage.Attempt,
+            IdempotencyKey = stage.IdempotencyKey,
+            TimeoutSeconds = stage.TimeoutSeconds,
+            Traceparent = stage.Traceparent,
+            Tracestate = stage.Tracestate,
+            TraceId = stage.TraceId,
+            SpanId = stage.SpanId,
             ContextItems = stage.ContextItems,
         };
 
@@ -1014,9 +1221,12 @@ public class PipelineRunner
 
             var properties = _publishChannel.CreateBasicProperties();
             properties.Persistent = true;
+            properties.MessageId = Guid.NewGuid().ToString("D");
 
             var body = Encoding.UTF8.GetBytes(payload);
             _publishChannel.BasicPublish(exchange: "", routingKey: queueName, basicProperties: properties, body: body);
+            stoppingToken.ThrowIfCancellationRequested();
+            _publishChannel.WaitForConfirmsOrDie(TimeSpan.FromSeconds(10));
         }
         finally
         {
@@ -1371,7 +1581,7 @@ public class PipelineRunner
             if (current is null)
                 return false;
 
-            return current.Status is "Completed" or "Failed" or "Skipped";
+            return current.Status is "Completed" or "Failed" or "Skipped" or "Cancelled";
         }
         catch (Exception ex)
         {
@@ -1539,15 +1749,27 @@ public class PipelineRunner
     {
         public int? PipelineId { get; set; }
         public int StageId { get; set; }
+        public string? ExecutionId { get; set; }
+        public int? Attempt { get; set; }
         public string Result { get; set; } = string.Empty;
         public bool IsSuccess { get; set; }
         public string? ErrorCode { get; set; }
+        public bool? Retryable { get; set; }
         public int? NextStageId { get; set; }
         public bool RunNextIfCurrentFailed { get; set; }
         public bool IsWaitingForApproval { get; set; }
         public List<StageLogDto>? Logs { get; set; }
         public List<ContextItem>? ContextItems { get; set; }
         public List<WorkerAppendedStageMessage>? AppendedStages { get; set; }
+    }
+
+    private sealed class LeaseMonitorState
+    {
+        private int _lost;
+
+        public bool Lost => Volatile.Read(ref _lost) != 0;
+
+        public void MarkLost() => Interlocked.Exchange(ref _lost, 1);
     }
 
     private sealed class WorkerAppendedStageMessage

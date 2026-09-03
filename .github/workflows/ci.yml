@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore PipelogiqSdk.sln
+
+      - name: Build
+        run: dotnet build PipelogiqSdk.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test PipelogiqSdk.sln -c Release --no-build --verbosity normal
+
+      - name: Pack
+        run: dotnet pack PipelogiqSdk.sln -c Release --no-build -o artifacts/ci
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: artifacts/ci/*.nupkg

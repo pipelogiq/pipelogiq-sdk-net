@@ -26,6 +26,31 @@ public class StageOptions
     public int? MaxRetries { get; set; }
 
     /// <summary>
+    /// Gets or sets the failure error codes that are eligible for retry.
+    /// When omitted, the server retains its legacy retry behavior.
+    /// </summary>
+    [Newtonsoft.Json.JsonProperty("retryOnErrorCodes")]
+    public List<string>? RetryOnErrorCodes { get; set; }
+
+    /// <summary>
+    /// Gets or sets retry backoff strategy, for example <c>fixed</c>, <c>linear</c>, or <c>exponential</c>.
+    /// </summary>
+    [Newtonsoft.Json.JsonProperty("backoff")]
+    public string? Backoff { get; set; }
+
+    /// <summary>
+    /// Gets or sets the maximum retry interval in seconds.
+    /// </summary>
+    [Newtonsoft.Json.JsonProperty("maxRetryInterval")]
+    public int? MaxRetryInterval { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether retry delay jitter is enabled.
+    /// </summary>
+    [Newtonsoft.Json.JsonProperty("jitter")]
+    public bool? Jitter { get; set; }
+
+    /// <summary>
     /// Gets or sets dependency stage names.
     /// </summary>
     public List<string>? DependsOn { get; set; }

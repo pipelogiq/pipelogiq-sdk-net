@@ -1,11 +1,11 @@
 <Project>
   <PropertyGroup>
-    <VersionPrefix>0.3.2-preview.5</VersionPrefix>
+    <VersionPrefix>0.3.2-preview.6</VersionPrefix>
     <Authors>Pipelogiq</Authors>
     <Company>Pipelogiq</Company>
     <RepositoryUrl>https://github.com/pipelogiq/pipelogiq-sdk-net</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Nullable>enable</Nullable>

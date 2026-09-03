@@ -47,6 +47,7 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
         // Fall back to the startup-time singleton so that builders constructed with `new PipelineBuilder()`
         // (outside DI) still work. The global context is internal and set-once — this is safe.
         var runnerOptions = options ?? GlobalRunnerContext.Options ?? new PipelogiqRunnerOptions();
+        ApiKey = runnerOptions.ApiKey;
         ApiClient = new PipelogiqApiClient(runnerOptions);
     }
 
@@ -81,13 +82,19 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
     /// <returns>Current builder instance.</returns>
     public TSelf AddContextItem(string key, object value)
     {
-        ContextItems.Add(new ContextItem
-        {
-            Key = key,
-            Value = JsonSerializer.Serialize(value),
-            ValueType = value.GetType().AssemblyQualifiedName ?? value.GetType().FullName ?? string.Empty,
-        });
-        return (TSelf)this;
+        return AddContextItemCore(key, value, isSensitive: false);
+    }
+
+    /// <summary>
+    /// Adds a context item that must be redacted from logs and status responses.
+    /// Do not use pipeline context as the system of record for business secrets.
+    /// </summary>
+    /// <param name="key">Context key.</param>
+    /// <param name="value">Context value.</param>
+    /// <returns>Current builder instance.</returns>
+    public TSelf AddSensitiveContextItem(string key, object value)
+    {
+        return AddContextItemCore(key, value, isSensitive: true);
     }
 
     /// <summary>
@@ -102,6 +109,7 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
                 Key = item.Key,
                 Value = item.Value,
                 ValueType = item.ValueType,
+                IsSensitive = item.IsSensitive,
             })
             .ToList();
 
@@ -152,7 +160,20 @@ public abstract class BaseBuilder<TSelf> where TSelf : BaseBuilder<TSelf>
             Key = key,
             Value = JsonSerializer.Serialize(value),
             ValueType = valueType.AssemblyQualifiedName ?? valueType.FullName ?? string.Empty,
+            IsSensitive = false,
         };
+    }
+
+    private TSelf AddContextItemCore(string key, object value, bool isSensitive)
+    {
+        ContextItems.Add(new ContextItem
+        {
+            Key = key,
+            Value = JsonSerializer.Serialize(value),
+            ValueType = value.GetType().AssemblyQualifiedName ?? value.GetType().FullName ?? string.Empty,
+            IsSensitive = isSensitive,
+        });
+        return (TSelf)this;
     }
 
     /// <summary>

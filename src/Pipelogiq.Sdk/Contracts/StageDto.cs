@@ -35,6 +35,9 @@ public class StageDto
     /// <summary>Stage completion time (UTC).</summary>
     public DateTime? FinishedAt { get; set; }
 
+    /// <summary>Time at which a delayed retry becomes eligible, if one is scheduled.</summary>
+    public DateTime? NextRetryAt { get; set; }
+
     /// <summary>Stage input payload (JSON).</summary>
     public string? Input { get; set; }
 
@@ -52,4 +55,38 @@ public class StageDto
 
     /// <summary>Whether next stage runs if this stage fails.</summary>
     public bool RunNextIfCurrentFailed { get; set; }
+
+    /// <summary>Total number of execution attempts recorded for the stage.</summary>
+    [Newtonsoft.Json.JsonProperty("attempt")]
+    public int? Attempts { get; set; }
+
+    /// <summary>Number of automatic retries already scheduled for the stage.</summary>
+    public int? RetryAttempt { get; set; }
+
+    /// <summary>Error code reported by the most recent failed attempt.</summary>
+    public string? LastErrorCode { get; set; }
+
+    /// <summary>Server classification of the latest failure: retryable or terminal.</summary>
+    public string? FailureDisposition { get; set; }
+
+    /// <summary>Whether the server considers this stage terminal.</summary>
+    public bool? IsTerminal { get; set; }
+
+    /// <summary>Effective stage execution options when returned by the server.</summary>
+    public StageOptions? Options { get; set; }
+
+    /// <summary>Stage log entries when requested by the status endpoint.</summary>
+    public List<StageLogDto>? Logs { get; set; }
+
+    /// <summary>Number of historical terminal failures retained by the server.</summary>
+    public int FailureCount { get; set; }
+
+    /// <summary>Timestamp of the most recent historical terminal failure.</summary>
+    public DateTime? LastFailedAt { get; set; }
+
+    /// <summary>Whether the stage has any retained terminal failure history.</summary>
+    public bool HasFailureHistory { get; set; }
+
+    /// <summary>Current or most recently recorded stage execution identifier.</summary>
+    public string? ExecutionId { get; set; }
 }

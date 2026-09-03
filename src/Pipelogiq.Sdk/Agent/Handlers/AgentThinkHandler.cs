@@ -87,7 +87,8 @@ public class AgentThinkHandler(
 
         // Handle post-confirmation resume: approved/rejected decision is in context
         var approved = context.TryGetValue<bool?>(AgentConstants.ApprovalDecision);
-        if (approved.HasValue)
+        var approvalAlreadyConsumed = context.TryGetValue<bool>(AgentConstants.ApprovalDecisionConsumed);
+        if (approved.HasValue && !approvalAlreadyConsumed)
         {
             history.Add(new AgentConversationTurn
             {
@@ -114,8 +115,39 @@ public class AgentThinkHandler(
             // so TryConsumeApprovedMutation can match them and skip re-confirmation.
             ExtractAndSetApprovedMutations(history, context);
 
-            // Clear approval flag so next think step starts fresh
-            context.Payload!.Remove(AgentConstants.ApprovalDecision);
+            // Pipeline context is append-only in persisted stages. Mark the approval as
+            // consumed explicitly; removing the key from Payload is not enough for later stages.
+            SetContextValue(context, AgentConstants.ApprovalDecisionConsumed, true);
+        }
+        else if (approved.HasValue)
+        {
+            context.LogInfo("Approval decision already consumed for this pipeline. Continuing normal reasoning.");
+        }
+
+        var approvedMutation = TryPopApprovedMutation(context);
+        if (approvedMutation != null)
+        {
+            context.LogInfo(
+                $"Executing approved mutation without another LLM decision [tool={approvedMutation.Tool}, resultKey={approvedMutation.EffectiveResultKey}]");
+            SetContextValue(context, AgentConstants.ConversationHistory, history);
+            return await HandleCallToolAsync(
+                pipelineId,
+                new AgentThinkDecision
+                {
+                    Action = AgentThinkAction.CallTool,
+                    ToolCall = approvedMutation,
+                    RawDecisionJson = JsonSerializer.Serialize(new
+                    {
+                        action = "call_tool",
+                        tool = approvedMutation.Tool,
+                        @params = approvedMutation.Params,
+                        resultKey = approvedMutation.ResultKey,
+                        reasoning = "Executing user-approved mutation."
+                    }),
+                },
+                history,
+                context,
+                continueThinkingAfterTool: false);
         }
 
         // Check for tool loop: if any single tool has failed 3 times in a row,
@@ -305,7 +337,8 @@ public class AgentThinkHandler(
         int pipelineId,
         AgentThinkDecision decision,
         List<AgentConversationTurn> history,
-        IStageContext context)
+        IStageContext context,
+        bool continueThinkingAfterTool = true)
     {
         var call = decision.ToolCall!;
 
@@ -321,10 +354,18 @@ public class AgentThinkHandler(
         await SendToolCallProgressAsync(context, call.Tool);
         context.LogInfo(
             $"Scheduling tool call [tool={call.Tool}, resultKey={call.EffectiveResultKey}, params={call.Params.ToLogPreview(800)}]");
-        var appendedStages = await AppendStagesAsync(pipelineId, [BuildToolStage(call), BuildThinkStage()]);
+        var nextStage = continueThinkingAfterTool
+            ? BuildThinkStage()
+            : BuildResponderStage();
+        if (!continueThinkingAfterTool)
+            SetContextValue(context, AgentConstants.ResponderAppended, true);
+
+        var appendedStages = await AppendStagesAsync(pipelineId, [BuildToolStage(call), nextStage]);
 
         var output = AgentUsageContextHelper.BuildStageOutput(
-            $"Think step {GetStep(context)}: calling tool '{call.Tool}'.",
+            continueThinkingAfterTool
+                ? $"Think step {GetStep(context)}: calling tool '{call.Tool}'."
+                : $"Think step {GetStep(context)}: calling approved tool '{call.Tool}' and finishing.",
             context,
             decision.TokenUsage,
             "think");
@@ -468,11 +509,31 @@ public class AgentThinkHandler(
             return true;
 
         if (approvedMutations.Count == 0)
-            context.Payload.Remove(AgentConstants.ApprovedMutations);
+            context.Payload[AgentConstants.ApprovedMutations] = new List<AgentToolCall>();
         else
             context.Payload[AgentConstants.ApprovedMutations] = approvedMutations;
 
         return true;
+    }
+
+    private static AgentToolCall? TryPopApprovedMutation(IStageContext? context)
+    {
+        var approvedMutations = context.TryGetValue<List<AgentToolCall>>(AgentConstants.ApprovedMutations);
+        if (approvedMutations == null || approvedMutations.Count == 0)
+            return null;
+
+        var call = approvedMutations[0];
+        approvedMutations.RemoveAt(0);
+
+        if (context?.Payload != null)
+        {
+            if (approvedMutations.Count == 0)
+                context.Payload[AgentConstants.ApprovedMutations] = new List<AgentToolCall>();
+            else
+                context.Payload[AgentConstants.ApprovedMutations] = approvedMutations;
+        }
+
+        return call;
     }
 
     private static bool ToolCallsEqual(AgentToolCall left, AgentToolCall right)

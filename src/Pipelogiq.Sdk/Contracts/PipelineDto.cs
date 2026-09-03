@@ -21,6 +21,13 @@ public class PipelineDto
     public string Name { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the client-provided idempotency key used for fail-safe pipeline creation.
+    /// The key is scoped by the server to the authenticated application.
+    /// </summary>
+    [Newtonsoft.Json.JsonProperty("idempotencyKey")]
+    public string? IdempotencyKey { get; set; }
+
+    /// <summary>
     /// Gets or sets creation timestamp in UTC.
     /// </summary>
     public DateTime? CreatedAt { get; set; }

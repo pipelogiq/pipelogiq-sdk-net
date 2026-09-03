@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using PipelogiqSDK.Builders;
 using PipelogiqSDK.Configuration;
 using PipelogiqSDK.Contracts;
@@ -73,14 +74,15 @@ public sealed class PipelineBuilderTracingTests
     {
         var item = Assert.Single((contextItems ?? Array.Empty<ContextItem>()).Where(i =>
             string.Equals(i.Key, key, StringComparison.OrdinalIgnoreCase)));
-        return item.Value;
+        return DecodeContextValue(item.Value);
     }
 
     private static string? GetOptionalContextItemValue(IEnumerable<ContextItem>? contextItems, string key)
     {
-        return (contextItems ?? Array.Empty<ContextItem>())
+        var value = (contextItems ?? Array.Empty<ContextItem>())
             .FirstOrDefault(i => string.Equals(i.Key, key, StringComparison.OrdinalIgnoreCase))
             ?.Value;
+        return value is null ? null : DecodeContextValue(value);
     }
 
     private static void AssertNoLegacyTraceKeys(IEnumerable<ContextItem>? contextItems)
@@ -90,6 +92,10 @@ public sealed class PipelineBuilderTracingTests
         Assert.DoesNotContain(keys, key => string.Equals(key, LegacyCorrelationIdKey, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(keys, key => string.Equals(key, LegacyLegacyTraceIdKey, StringComparison.OrdinalIgnoreCase));
     }
+
+    // Context item values travel JSON-encoded on the wire; decode before parsing.
+    private static string DecodeContextValue(string raw)
+        => JsonSerializer.Deserialize<string>(raw) ?? raw;
 
     private static Activity StartW3cActivity(string name)
     {

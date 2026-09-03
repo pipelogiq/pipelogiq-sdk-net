@@ -39,6 +39,33 @@ public class StageExecutionData
     /// </summary>
     public int? PipelineId { get; set; }
 
+    /// <summary>Gets or sets stable execution identifier.</summary>
+    public string? ExecutionId { get; set; }
+
+    /// <summary>Gets or sets one-based execution attempt number.</summary>
+    public int? Attempt { get; set; }
+
+    /// <summary>Gets or sets associated pipeline idempotency key.</summary>
+    public string? IdempotencyKey { get; set; }
+
+    /// <summary>Gets or sets effective timeout in seconds.</summary>
+    public int? TimeoutSeconds { get; set; }
+
+    /// <summary>Gets or sets handler execution cancellation token.</summary>
+    public CancellationToken CancellationToken { get; set; }
+
+    /// <summary>Gets or sets W3C traceparent.</summary>
+    public string? Traceparent { get; set; }
+
+    /// <summary>Gets or sets W3C tracestate.</summary>
+    public string? Tracestate { get; set; }
+
+    /// <summary>Gets or sets trace identifier.</summary>
+    public string? TraceId { get; set; }
+
+    /// <summary>Gets or sets span identifier.</summary>
+    public string? SpanId { get; set; }
+
     /// <summary>
     /// Gets or sets incoming context items.
     /// </summary>

@@ -98,7 +98,7 @@ public class AgentToolHandler(
                 StatusCode = 500,
                 IsSuccess = false,
             };
-            context.LogError($"Tool execution crashed [tool={input.ToolName}, error={ex.Message.ToLogPreview(800)}]");
+            context.LogError($"Tool execution crashed [tool={input.ToolName}, error={ex.ToString().ToLogPreview(1600)}]");
         }
 
         RecordResult:
@@ -528,9 +528,12 @@ public class AgentToolHandler(
         public AgentAuthHeaderDefinition? Authentication { get; init; }
     }
 
-    private static HashSet<string> ExtractPathParamNames(string urlTemplate)
+    private static HashSet<string> ExtractPathParamNames(string? urlTemplate)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(urlTemplate))
+            return result;
+
         foreach (Match match in Regex.Matches(urlTemplate, @"\{(\w+)\}"))
             result.Add(match.Groups[1].Value);
         return result;

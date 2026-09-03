@@ -11,6 +11,7 @@ public class PipelineBuilder : BaseBuilder<PipelineBuilder>
 {
     private readonly string _name;
     private readonly List<StageInfo> _stages = new();
+    private string? _idempotencyKey;
 
     private PipelineBuilder(string name, PipelogiqRunnerOptions? options = null) : base(options)
     {
@@ -29,6 +30,19 @@ public class PipelineBuilder : BaseBuilder<PipelineBuilder>
     }
 
     /// <summary>
+    /// Configures fail-safe idempotent pipeline creation.
+    /// Repeated sends with the same key return the same pipeline for the authenticated application.
+    /// </summary>
+    /// <param name="idempotencyKey">Non-empty client-provided idempotency key.</param>
+    /// <returns>Current builder instance.</returns>
+    public PipelineBuilder WithIdempotencyKey(string idempotencyKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        _idempotencyKey = idempotencyKey.Trim();
+        return this;
+    }
+
+    /// <summary>
     /// Adds an action stage and infers handler name from action type.
     /// </summary>
     /// <typeparam name="TAction">Action handler type.</typeparam>
@@ -39,6 +53,18 @@ public class PipelineBuilder : BaseBuilder<PipelineBuilder>
     public PipelineBuilder WithAction<TAction>(string stageName, object? input = null, StageOptions? options = null) where TAction : class
     {
         return WithAction(stageName, typeof(TAction).Name, input, options);
+    }
+
+    /// <summary>
+    /// Adds an action stage with stage options and no input, inferring handler name from action type.
+    /// </summary>
+    /// <typeparam name="TAction">Action handler type.</typeparam>
+    /// <param name="stageName">Stage name.</param>
+    /// <param name="options">Stage options.</param>
+    /// <returns>Current builder instance.</returns>
+    public PipelineBuilder WithAction<TAction>(string stageName, StageOptions options) where TAction : class
+    {
+        return WithAction(stageName, typeof(TAction).Name, null, options);
     }
 
     /// <summary>
@@ -60,6 +86,29 @@ public class PipelineBuilder : BaseBuilder<PipelineBuilder>
     public PipelineBuilder WithAction<TAction>() where TAction : class
     {
         return WithAction(typeof(TAction).Name, typeof(TAction).Name);
+    }
+
+    /// <summary>
+    /// Adds an action stage with stage options using type name as both stage and handler names.
+    /// </summary>
+    /// <typeparam name="TAction">Action handler type.</typeparam>
+    /// <param name="options">Stage options.</param>
+    /// <returns>Current builder instance.</returns>
+    public PipelineBuilder WithAction<TAction>(StageOptions options) where TAction : class
+    {
+        return WithAction(typeof(TAction).Name, typeof(TAction).Name, null, options);
+    }
+
+    /// <summary>
+    /// Adds an action stage with explicit stage and handler names, stage options, and no input.
+    /// </summary>
+    /// <param name="stageName">Stage name.</param>
+    /// <param name="stageHandlerName">Registered stage handler name.</param>
+    /// <param name="options">Stage options.</param>
+    /// <returns>Current builder instance.</returns>
+    public PipelineBuilder WithAction(string stageName, string stageHandlerName, StageOptions options)
+    {
+        return WithAction(stageName, stageHandlerName, null, options);
     }
 
     /// <summary>
@@ -113,6 +162,7 @@ public class PipelineBuilder : BaseBuilder<PipelineBuilder>
         {
             ApiKey = key,
             Name = _name,
+            IdempotencyKey = _idempotencyKey,
             Stages = _stages,
             PipelineKeywords = Keywords,
             PipelineContextItems = contextItems,
@@ -126,6 +176,9 @@ public class PipelineBuilder : BaseBuilder<PipelineBuilder>
     /// <returns>Created pipeline response with id, status and stages.</returns>
     public Task<PipelineResponse> SendAsync(CancellationToken ct = default)
     {
-        return ApiClient.PostPipelineAsync(Build(), ct);
+        var pipeline = Build();
+        return string.IsNullOrWhiteSpace(pipeline.IdempotencyKey)
+            ? ApiClient.PostPipelineAsync(pipeline, ct)
+            : ApiClient.PostIdempotentPipelineAsync(pipeline, ct);
     }
 }

@@ -33,10 +33,18 @@ internal static class PayloadConverter
         return payload;
     }
 
-    public static List<ContextItem> ToContextItems(Dictionary<string, object>? payload)
+    public static List<ContextItem> ToContextItems(
+        Dictionary<string, object>? payload,
+        IEnumerable<ContextItem>? existingContextItems = null)
     {
         if (payload == null || payload.Count == 0)
             return new List<ContextItem>();
+
+        var sensitiveKeys = existingContextItems?
+            .Where(item => item.IsSensitive && !string.IsNullOrWhiteSpace(item.Key))
+            .Select(item => item.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var contextItems = new List<ContextItem>(payload.Count);
 
@@ -49,7 +57,8 @@ internal static class PayloadConverter
             {
                 Key = key,
                 Value = JsonSerializer.Serialize(value, valueType, SerializeOptions),
-                ValueType = valueTypeName
+                ValueType = valueTypeName,
+                IsSensitive = sensitiveKeys.Contains(key)
             });
         }
 

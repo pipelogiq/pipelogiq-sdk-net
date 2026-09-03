@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-preview.6] - 2026-09-03
+
+### Added
+
+- Opt-in application-scoped idempotent pipeline creation and lookup by key.
+- SDK pipeline status and cancellation clients, including attempts, last error
+  code, failure disposition, timestamps, and terminal flags.
+- Explicit retryable and terminal stage results with standard transient and
+  business-terminal error codes.
+- Error-code retry allowlists, fixed/linear/exponential backoff, delay caps,
+  jitter, and sensitive context markers.
+- Stable handler execution metadata, cooperative cancellation, execution
+  leases, renewal, publisher confirms, and stale-result fencing support.
+- Reference insurance claim/cancellation workflow with unknown-outcome status
+  reconciliation.
+
+### Compatibility
+
+- Existing `PipelineBuilder.Create`, `WithAction`, `StageOptions`,
+  `IStageHandler`, `IStageContext`, `StageResult.Success/Error`, and legacy
+  `SendAsync` behavior remain available.
+- Critical workflows require Pipelogiq server `v0.3.2-preview.7` before
+  upgrading workers/consumers to this SDK target.
+
+### Security
+
+- TLS certificate validation is enabled by default. The explicit
+  `AllowInsecureServerCertificate` development override defaults to `false`.
+- Runner logs no longer include raw stage input/result payloads, and sensitive
+  context metadata survives handler round trips.
+
+### Changed
+
+- Package version is now sourced solely from `Directory.Build.props`; the per-project
+  `<Version>` elements were removed so the four packages can no longer drift apart.
+- `PipelogiqSDK` carries a package description, tags, and project URL on NuGet.
+
+### Fixed
+
+- `PackageLicenseExpression` is `MIT`, matching `LICENSE`, `NOTICE` and the README.
+  Published packages were previously stamped `Apache-2.0`.
+- Tracing tests now encode and decode pipeline context values the way the builder and
+  stage executor do on the wire, instead of comparing raw JSON against parsed values.
+
+### Removed
+
+- Unused `Hashids.net` dependency, which every consumer was forced to resolve.
+- Internal implementation prompt from the published documentation set.
+
+### Infrastructure
+
+- Added GitHub Actions CI: restore, build, test and pack on every push and pull request.
+  The repository previously had no automated verification of any kind.
+
+### Known issues
+
+- Eight tests in the `Agent` namespace fail: tool parameter validation and responder
+  handling assert the pre-reliability contract of throwing exceptions, while the handlers
+  now return classified stage results. The Agent subsystem stays marked Preview until the
+  contract is reconciled.
+
 ## [0.3.2-preview.5] - 2026-04-20
 
 ### Added
@@ -253,6 +314,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > This is an early preview release. APIs may change.
 
 [Unreleased]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.5...HEAD
+[0.3.2-preview.6]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.6
 [0.3.2-preview.5]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.5
 [0.3.2-preview.4]: https://github.com/pipelogiq/pipelogiq-sdk-net/compare/v0.3.2-preview.3...v0.3.2-preview.4
 [0.3.2-preview.3]: https://github.com/pipelogiq/pipelogiq-sdk-net/releases/tag/v0.3.2-preview.3

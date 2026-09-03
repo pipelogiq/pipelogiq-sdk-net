@@ -2,11 +2,12 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <PackageId>PipelogiqSDK</PackageId>
-    <Version>0.3.2-preview.5</Version>
+    <Description>.NET worker runtime and API client for Pipelogiq — define pipelines, run stage handlers, and report results with retries, leases, idempotency and W3C trace propagation.</Description>
+    <PackageTags>pipelogiq;workflow;orchestration;pipeline;worker;opentelemetry</PackageTags>
+    <PackageProjectUrl>https://github.com/pipelogiq/pipelogiq-sdk-net</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Hashids.net" Version="1.7.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
