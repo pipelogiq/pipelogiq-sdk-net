@@ -72,7 +72,7 @@ public sealed class AgentThinkHandlerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_MutatingCallWithPreApproval_ExecutesToolStageWithoutExtraConfirmation()
+    public async Task ExecuteAsync_MutatingCallWithPreApproval_ExecutesToolThenResponds()
     {
         var plannedCall = new AgentToolCall
         {
@@ -129,8 +129,13 @@ public sealed class AgentThinkHandlerTests
         Assert.True(result.IsSuccess);
         Assert.Equal(2, handler.LastAppendedStages.Count);
         Assert.Equal("AgentToolHandler", handler.LastAppendedStages[0].StageHandlerName);
-        Assert.Equal("AgentThinkHandler", handler.LastAppendedStages[1].StageHandlerName);
-        Assert.False(context.Payload!.ContainsKey("agent:approvedMutations"));
+        // An approved mutation finishes the run: the responder follows the tool directly so
+        // one approval cannot cascade into further mutations without asking again.
+        Assert.Equal("AgentResponderHandler", handler.LastAppendedStages[1].StageHandlerName);
+        // Pipeline context is append-only across persisted stages, so the consumed approval
+        // is emptied in place rather than removed — the key survives, the approval does not.
+        var remainingApprovals = Assert.IsType<List<AgentToolCall>>(context.Payload!["agent:approvedMutations"]);
+        Assert.Empty(remainingApprovals);
     }
 
     [Fact]
@@ -307,7 +312,7 @@ public sealed class AgentThinkHandlerTests
 
         var result = await handler.ExecuteAsync(context);
 
-        Assert.True(result.IsSuccess);
+        Assert.False(result.IsSuccess);
         Assert.Equal("TOOL_LOOP", result.ErrorCode);
         Assert.Empty(handler.LastAppendedStages);
     }

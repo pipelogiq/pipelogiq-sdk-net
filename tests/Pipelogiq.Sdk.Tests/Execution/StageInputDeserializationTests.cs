@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using PipelogiqSDK.Abstractions;
 using PipelogiqSDK.Agent.Models;
@@ -31,8 +32,10 @@ public sealed class StageInputDeserializationTests
         Assert.NotNull(handler.Captured);
         Assert.Equal("getProjectWorkItems", handler.Captured!.ToolName);
         Assert.Equal("getProjectWorkItems", handler.Captured.ResultKey);
-        Assert.Equal("p1", handler.Captured.Params["projectId"]);
-        Assert.Equal("10", handler.Captured.Params["limit"]);
+        // Free-form params deserialize into JsonElement values; AgentToolHandler coerces them
+        // against the tool schema before use, so the contract here is the scalar content.
+        Assert.Equal("p1", ScalarOf(handler.Captured.Params["projectId"]));
+        Assert.Equal("10", ScalarOf(handler.Captured.Params["limit"]));
     }
 
     private static StageExecutor CreateExecutor()
@@ -52,4 +55,14 @@ public sealed class StageInputDeserializationTests
             return Task.FromResult<IStageResult>(StageResult.Success("ok"));
         }
     }
+
+    /// <summary>Reads a free-form parameter value as its scalar text.</summary>
+    private static string ScalarOf(object? value) => value switch
+    {
+        null => string.Empty,
+        JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString() ?? string.Empty,
+        JsonElement element => element.ToString(),
+        _ => value.ToString() ?? string.Empty,
+    };
+
 }

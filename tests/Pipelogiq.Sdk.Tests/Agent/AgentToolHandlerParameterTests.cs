@@ -145,7 +145,7 @@ public sealed class AgentToolHandlerParameterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithMissingOrUnknownParams_ThrowsValidationError()
+    public async Task ExecuteAsync_WithMissingOrUnknownParams_RecordsToolError()
     {
         var tool = new AgentToolDefinition
         {
@@ -187,11 +187,17 @@ public sealed class AgentToolHandlerParameterTests
             }
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            handler.ExecuteAsync(missingRequiredInput, new StageContext()));
+        // Validation failures are recorded as tool errors instead of thrown: the handler
+        // keeps the pipeline alive so the planner can recover on the next think step.
+        var missingContext = new StageContext();
+        var missingResult = await handler.ExecuteAsync(missingRequiredInput, missingContext);
+        Assert.True(missingResult.IsSuccess);
+        Assert.Contains("requires parameter 'amount'", ToolResponseBody(missingContext, "createOrder"));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            handler.ExecuteAsync(unknownParamInput, new StageContext()));
+        var unknownContext = new StageContext();
+        var unknownResult = await handler.ExecuteAsync(unknownParamInput, unknownContext);
+        Assert.True(unknownResult.IsSuccess);
+        Assert.Contains("does not define parameter 'unexpected'", ToolResponseBody(unknownContext, "createOrder"));
     }
 
     [Fact]
@@ -445,7 +451,7 @@ public sealed class AgentToolHandlerParameterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithMissingContextHeaderValue_Throws()
+    public async Task ExecuteAsync_WithMissingContextHeaderValue_RecordsToolError()
     {
         var tool = new AgentToolDefinition
         {
@@ -469,13 +475,17 @@ public sealed class AgentToolHandlerParameterTests
             new AgentOptions(),
             new StaticHttpClientFactory(new HttpClient(new RecordingHttpMessageHandler())));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            handler.ExecuteAsync(new AgentToolCallInput
-            {
-                ToolName = "lookupCustomer",
-                ResultKey = "lookupCustomer",
-                Params = new Dictionary<string, object?> { ["id"] = 5 }
-            }, new StageContext()));
+        // An unresolvable header template is a tool error, not a pipeline crash.
+        var context = new StageContext();
+        var result = await handler.ExecuteAsync(new AgentToolCallInput
+        {
+            ToolName = "lookupCustomer",
+            ResultKey = "lookupCustomer",
+            Params = new Dictionary<string, object?> { ["id"] = 5 }
+        }, context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Contains("Tool execution error", ToolResponseBody(context, "lookupCustomer"));
     }
 
     private sealed class StaticToolRegistry(
@@ -559,4 +569,11 @@ public sealed class AgentToolHandlerParameterTests
         string? Uri,
         string? Body,
         Dictionary<string, string> Headers);
+
+    /// <summary>Reads the tool response body the handler recorded on the stage context.</summary>
+    private static string ToolResponseBody(StageContext context, string resultKey)
+        => context.Payload.TryGetValue($"agent:result:{resultKey}", out var value)
+            ? value?.ToString() ?? string.Empty
+            : string.Empty;
+
 }

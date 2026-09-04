@@ -85,6 +85,20 @@ public class AgentResponderHandler(
             }
         }
 
+        // The think handler marks unrecoverable runs (tool loop, budget exceeded). The user
+        // still gets the prepared apology above, but the stage must report a classified
+        // terminal failure so retries do not repeat a run that cannot succeed.
+        if (context.TryGetValue<bool>(AgentConstants.TerminalFailure))
+        {
+            var failureCode = context.TryGetValue<string>(AgentConstants.TerminalFailureCode);
+            if (string.IsNullOrWhiteSpace(failureCode))
+                failureCode = "AGENT_TERMINAL_FAILURE";
+
+            context.LogWarning($"Agent run ended in a terminal failure [code={failureCode}]");
+            var terminal = StageResult.TerminalError(result.Result ?? responseText, failureCode);
+            return terminal;
+        }
+
         return result;
     }
 

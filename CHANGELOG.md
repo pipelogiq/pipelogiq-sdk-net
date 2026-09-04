@@ -61,12 +61,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added GitHub Actions CI: restore, build, test and pack on every push and pull request.
   The repository previously had no automated verification of any kind.
 
-### Known issues
+### Fixed (Agent)
 
-- Eight tests in the `Agent` namespace fail: tool parameter validation and responder
-  handling assert the pre-reliability contract of throwing exceptions, while the handlers
-  now return classified stage results. The Agent subsystem stays marked Preview until the
-  contract is reconciled.
+- `AgentResponderHandler` now honours the terminal-failure flag the think handler sets on
+  a tool loop or an exceeded budget. The user still receives the prepared apology, but the
+  stage reports a classified terminal result instead of success, so retry policies stop
+  repeating a run that cannot succeed.
+- Reconciled the Agent test suite with the contracts the handlers actually implement:
+  tool validation failures are recorded as tool errors rather than thrown, an approved
+  mutation hands over to the responder instead of looping back into reasoning, a consumed
+  approval is emptied in place because pipeline context is append-only, and the Anthropic
+  prompt-safety assertions accept both the plain and cache-wrapped system prompt shapes.
+  The whole suite passes: 87 of 87.
 
 ## [0.3.2-preview.5] - 2026-04-20
 
