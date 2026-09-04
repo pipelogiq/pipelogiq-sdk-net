@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NUGET_SOURCE="${NUGET_SOURCE:-https://api.nuget.org/v3/index.json}"
 PUSH_PACKAGES="${PUSH_PACKAGES:-true}"
-VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$ROOT_DIR/src/Pipelogiq.Sdk/PipelogiqSDK.csproj" | head -n 1)"
+VERSION="$(sed -n 's:.*<VersionPrefix>\(.*\)</VersionPrefix>.*:\1:p' "$ROOT_DIR/Directory.Build.props" | head -n 1)"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/artifacts/packages/$VERSION}"
 
 if [[ -z "$VERSION" ]]; then
-  echo "Unable to determine package version from PipelogiqSDK.csproj." >&2
+  echo "Unable to determine package version from Directory.Build.props." >&2
   exit 1
 fi
 
